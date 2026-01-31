@@ -1,0 +1,6 @@
+## Interface: 120000
+## Title: KeyRoll
+## Notes: Randomly rolls a Mythic+ keystone from party members
+## Author: Zerkggz
+## Version: 1.0
+KeyRoll.lua
