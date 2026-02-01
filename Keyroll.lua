@@ -259,6 +259,9 @@ frame:SetScript("OnEvent", function(_, event, prefix, message, _, sender)
         DebugPrint("Dungeon completed – updating party keystones")
         PruneCache()             -- remove any members who left mid-dungeon
         RequestPartyKeystones()  -- refresh keys from current party
+		C_Timer.After(30, function()
+			ManualCapture()  -- safely requests keys again
+		end)
         return
     end
 end)
