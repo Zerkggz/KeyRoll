@@ -4,7 +4,7 @@ KeyRollDB = KeyRollDB or {}
 local cache = KeyRollDB
 local lastRequestZone
 local lastPartyMembers = {}
-local KEY_REQUEST_COOLDOWN = 5      -- seconds
+local KEY_REQUEST_COOLDOWN = 5
 local lastKeyRequestTime = 0
 local pendingKeyRequest = false
 
@@ -106,14 +106,15 @@ end
 
 local function GetRollableKeys()
     PruneCache()
-
     local keys = {}
-    for _, key in pairs(cache) do
-        if not key.debug then
-            table.insert(keys, key)
+    if cache then
+        for _, key in pairs(cache) do
+            if key and not key.debug then
+                table.insert(keys, key)
+            end
         end
     end
-	return keys
+    return keys
 end
 
 -------------------------------------------------
@@ -158,9 +159,8 @@ local function ParseKeystone(prefix, message, sender)
 
     local mapID, level
 
-    -- First, handle party chat links (non-addon users)
+    -- Party chat links
     if not prefix or not ADDON_PREFIXES[prefix] then
-        -- Match standard Mythic+ keystone item link in chat
         mapID, level = message:match("Hkeystone:(%d+):(%d+)")
         mapID, level = tonumber(mapID), tonumber(level)
         if mapID and level and level > 0 then
@@ -170,7 +170,6 @@ local function ParseKeystone(prefix, message, sender)
         return
     end
 
-    -- Otherwise, parse known addon prefixes
     -- LibKS format: level,mapID,...
     if prefix == "LibKS" then
         level, mapID = message:match("^(%d+),(%d+)")
@@ -209,7 +208,7 @@ local function RequestPartyKeystones()
 end
 
 local function RequestPartyKeystonesSafe()
-    -- Never send during combat
+
     if InCombatLockdown() then
         if not pendingKeyRequest then
             DebugPrint("In combat – deferring keystone request")
@@ -222,7 +221,6 @@ local function RequestPartyKeystonesSafe()
     local now = GetTime()
     local elapsed = now - lastKeyRequestTime
 
-    -- Rate limit
     if elapsed < KEY_REQUEST_COOLDOWN then
         if not pendingKeyRequest then
             pendingKeyRequest = true
@@ -233,7 +231,6 @@ local function RequestPartyKeystonesSafe()
         return
     end
 
-    -- Passed all checks — send now
     pendingKeyRequest = false
     lastKeyRequestTime = now
     RequestPartyKeystones()
@@ -292,29 +289,32 @@ frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 
-frame:SetScript("OnEvent", function(_, event, prefix, message, _, sender)
-    -- Handle incoming keystone info from addons or party chat links
+frame:SetScript("OnEvent", function(_, event, arg1, arg2, arg3, arg4, arg5, arg6, arg7, arg8)
     if event == "CHAT_MSG_ADDON" then
-		if IsDebug() then DebugPrint("Received addon message:", prefix, message, "from", sender) end
-		ParseKeystone(prefix, message, sender)
-		return
-	end
+        local prefix, message, channel, sender = arg1, arg2, arg3, arg4
+        if not message or not sender then return end
+        if IsDebug() then
+            DebugPrint("Received addon message:", prefix, message, "from", sender)
+        end
+        ParseKeystone(prefix, message, sender)
+        return
+    end
 
-	if event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER" then
-		-- Skip processing in combat
-		if InCombatLockdown() then
-			return
-		end
+    if event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER" then
+        local message, sender = arg1, arg2
+        if not message or not sender then return end
 
-		-- Only process messages containing a keystone link
-		if type(message) == "string" and message:find("Hkeystone:%d+:%d+") then
-			if IsDebug() then DebugPrint("Received party keystone message:", message, "from", sender) end
-			ParseKeystone(nil, message, sender)
-		end
-		return
-	end
+        if InCombatLockdown() then return end
 
-    -- Only prune when someone leaves or joins the party
+        if type(message) == "string" and message:find("Hkeystone:%d+:%d+") then
+            if IsDebug() then
+                DebugPrint("Received party keystone message:", message, "from", sender)
+            end
+            ParseKeystone(nil, message, sender)
+        end
+        return
+    end
+
     if event == "GROUP_ROSTER_UPDATE" then
 		if not next(lastPartyMembers) then
 			lastPartyMembers = GetCurrentPartyMembers()
@@ -322,27 +322,21 @@ frame:SetScript("OnEvent", function(_, event, prefix, message, _, sender)
 		end
         PruneCache()
         RequestPartyKeystonesSafe()
-
         return
     end
 
-    -- Refresh keys when entering world or changing zones (like leaving/entering a dungeon)
     if event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
         RequestPartyKeystonesSafe()
-
         return
     end
 
-    -- Update cache at dungeon completion
     if event == "CHALLENGE_MODE_COMPLETED" then
         DebugPrint("Dungeon completed – updating party keystones")
-        PruneCache()  -- remove any members who left mid-dungeon
+        PruneCache()
         RequestPartyKeystonesSafe()
-  -- refresh keys from current party
 
-        -- Schedule a safe manual capture after 30 seconds
         C_Timer.After(30, function()
-            ManualCapture(true)  -- silently requests keys again
+            ManualCapture(true)
         end)
         return
     end
@@ -406,13 +400,11 @@ SlashCmdList["KEYROLL"] = function(msg)
     return
 end
 
-    -- Default roll
 	if #keys == 0 then
 		SafeSend("No party keystones known. Ask players to link keys.", true)
 		return
 	end
 
-	-- Pick a random flavor message safely
 	local rollMessage = ROLL_MESSAGES[math.random(#ROLL_MESSAGES)]
 	SendFlavor(rollMessage)
 
