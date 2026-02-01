@@ -144,19 +144,31 @@ end
 -------------------------------------------------
 -- Keystone parsing
 -------------------------------------------------
-local function ParseAddonKeystone(prefix, message, sender)
+local function ParseKeystone(prefix, message, sender)
     if type(message) ~= "string" or not sender then return end
     sender = Ambiguate(sender, "short")
 
     local mapID, level
 
+    -- First, handle party chat links (non-addon users)
+    if not ADDON_PREFIXES[prefix] then
+        -- Match standard Mythic+ keystone item link in chat
+        mapID, level = message:match("Hkeystone:(%d+):(%d+)")
+        mapID, level = tonumber(mapID), tonumber(level)
+        if mapID and level and level > 0 then
+            StoreKey(sender, mapID, level)
+            DebugPrint("Captured keystone from party chat link:", sender, mapID, level)
+        end
+        return
+    end
+
+    -- Otherwise, parse known addon prefixes
     -- LibKS format: level,mapID,...
     if prefix == "LibKS" then
         level, mapID = message:match("^(%d+),(%d+)")
         level, mapID = tonumber(level), tonumber(mapID)
-
-    -- BigWigs / MDT / DBM-Key fallback formats
     else
+        -- BigWigs / MDT / DBM-Key fallback formats
         mapID, level =
             message:match("KEYSTONE:(%d+):(%d+)") or
             message:match("map=(%d+).+level=(%d+)") or
@@ -166,7 +178,7 @@ local function ParseAddonKeystone(prefix, message, sender)
 
     if mapID and level and level > 0 then
         StoreKey(sender, mapID, level)
-        DebugPrint("Stored keystone:", sender, mapID, level)
+        DebugPrint("Stored keystone from addon:", sender, mapID, level)
     end
 end
 
@@ -212,43 +224,50 @@ end
 -------------------------------------------------
 -- Manual capture
 -------------------------------------------------
-local function ManualCapture()
+local function ManualCapture(silent)
     if not IsInGroup() and not DEBUG_MODE then
-        print(PREFIX, "You must be in a party to capture keys.")
+        if not silent then
+            print(PREFIX, "You must be in a party to capture keys.")
+        end
         return
     end
-	SafeSend("Requesting party keystones...")
+
+    if not silent then
+        SafeSend("Requesting party keystones...")
+    end
+
     DebugPrint("Manually capturing party keys...")
     RequestPartyKeystones()
 end
-
-
 
 -------------------------------------------------
 -- Event frame
 -------------------------------------------------
 local frame = CreateFrame("Frame")
 frame:RegisterEvent("CHAT_MSG_ADDON")
+frame:RegisterEvent("CHAT_MSG_PARTY")
+frame:RegisterEvent("CHAT_MSG_PARTY_LEADER")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
 frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 
 frame:SetScript("OnEvent", function(_, event, prefix, message, _, sender)
-    if event == "CHAT_MSG_ADDON" then
-        if IsDebug() then DebugPrint("Received addon message:", prefix, message, "from", sender) end
-        ParseAddonKeystone(prefix, message, sender)
+    -- Handle incoming keystone info from addons or party chat links
+    if event == "CHAT_MSG_ADDON" or event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER" then
+        if IsDebug() then DebugPrint("Received message:", prefix, message, "from", sender) end
+        ParseKeystone(prefix, message, sender)  -- new combined parser
         return
     end
 
-    -- Only prune when someone leaves or joins
+    -- Only prune when someone leaves or joins the party
     if event == "GROUP_ROSTER_UPDATE" then
         PruneCache()
         RequestPartyKeystones()
         return
     end
 
-    -- Refresh keys when entering world or changing zones (like when leaving a dungeon)
+    -- Refresh keys when entering world or changing zones (like leaving/entering a dungeon)
     if event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
         RequestPartyKeystones()
         return
@@ -257,11 +276,13 @@ frame:SetScript("OnEvent", function(_, event, prefix, message, _, sender)
     -- Update cache at dungeon completion
     if event == "CHALLENGE_MODE_COMPLETED" then
         DebugPrint("Dungeon completed – updating party keystones")
-        PruneCache()             -- remove any members who left mid-dungeon
+        PruneCache()  -- remove any members who left mid-dungeon
         RequestPartyKeystones()  -- refresh keys from current party
-		C_Timer.After(30, function()
-			ManualCapture()  -- safely requests keys again
-		end)
+
+        -- Schedule a safe manual capture after 30 seconds
+        C_Timer.After(30, function()
+            ManualCapture()  -- silently requests keys again
+        end)
         return
     end
 end)
