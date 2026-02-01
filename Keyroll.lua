@@ -232,17 +232,33 @@ frame:RegisterEvent("CHAT_MSG_ADDON")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("PLAYER_ENTERING_WORLD")
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+frame:RegisterEvent("CHALLENGE_MODE_COMPLETED")
 
 frame:SetScript("OnEvent", function(_, event, prefix, message, _, sender)
     if event == "CHAT_MSG_ADDON" then
-        if DEBUG_MODE then DebugPrint("Received addon message:", prefix, message, "from", sender) end
+        if IsDebug() then DebugPrint("Received addon message:", prefix, message, "from", sender) end
         ParseAddonKeystone(prefix, message, sender)
         return
     end
 
-    if event == "GROUP_ROSTER_UPDATE" or event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
+    -- Only prune when someone leaves or joins
+    if event == "GROUP_ROSTER_UPDATE" then
         PruneCache()
         RequestPartyKeystones()
+        return
+    end
+
+    -- Refresh keys when entering world or changing zones (like when leaving a dungeon)
+    if event == "PLAYER_ENTERING_WORLD" or event == "ZONE_CHANGED_NEW_AREA" then
+        RequestPartyKeystones()
+        return
+    end
+
+    -- Update cache at dungeon completion
+    if event == "CHALLENGE_MODE_COMPLETED" then
+        DebugPrint("Dungeon completed – updating party keystones")
+        PruneCache()             -- remove any members who left mid-dungeon
+        RequestPartyKeystones()  -- refresh keys from current party
         return
     end
 end)
