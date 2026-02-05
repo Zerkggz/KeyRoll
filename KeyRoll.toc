@@ -2,7 +2,7 @@
 ## Title: KeyRoll
 ## Notes: Randomly rolls a Mythic+ keystone from party members
 ## Author: Zerkggz
-## Version: 3.0.0
+## Version: 3.1.0
 ## SavedVariables: KeyRollGlobalDB
 ## SavedVariablesPerCharacter: KeyRollDB
 
@@ -10,8 +10,7 @@ Libs\AceComm-3.0\AceComm-3.0.lua
 Libs\AceSerializer-3.0\AceSerializer-3.0.lua
 
 Keyroll.lua
-Utils.lua
-Capture.lua
-Comm.lua
 Dungeons.lua
-
+Utils.lua
+Comm.lua
+Capture.lua

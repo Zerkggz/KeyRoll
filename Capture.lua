@@ -19,7 +19,7 @@ local function CaptureMyKeystone()
             for slot = 1, numSlots do
                 local itemLink = C_Container.GetContainerItemLink(bag, slot)
                 if itemLink then
-                    -- Look for "Keystone:" in the link instead of checking item ID
+                    -- Look for "Keystone:" in the link
                     if itemLink:find("Keystone:") then
                         -- Parse dungeon name and level from the link
                         local dungeonName, keyLevel = itemLink:match("%[Keystone:%s*(.-)%s*%((%d+)%)%]")
@@ -41,6 +41,12 @@ local function CaptureMyKeystone()
         if KeyRoll.IsDebug() then
             KeyRoll.DebugPrint("Captured from bag:", KeyRoll.GetDungeonNameByID(mapID), "+" .. level)
         end
+        
+        -- Broadcast to guild if we're in one
+        if IsInGuild() and KeyRoll.BroadcastKeystoneToGuild then
+            KeyRoll.BroadcastKeystoneToGuild()
+        end
+        
         return true
     end
 
@@ -110,18 +116,53 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
                 loginCaptureComplete = true
 
                 AutoCapturePartyKeys()
+                
+                -- Request keystones from guild members using KeyRoll
+                if IsInGuild() and KeyRoll.RequestGuildKeystonesFromAddon then
+                    C_Timer.After(3, function()
+                        KeyRoll.RequestGuildKeystonesFromAddon()
+                    end)
+                end
             end
         end)
 
     elseif event == "GROUP_ROSTER_UPDATE" then
         AutoCapturePartyKeys()
         KeyRoll.MarkCacheDirty()
+        
+        -- Broadcast and request guild keystones when group changes
+        if IsInGuild() then
+            if KeyRoll.BroadcastKeystoneToGuild then
+                C_Timer.After(1, function()
+                    KeyRoll.BroadcastKeystoneToGuild()
+                end)
+            end
+            if KeyRoll.RequestGuildKeystonesFromAddon then
+                C_Timer.After(2, function()
+                    KeyRoll.RequestGuildKeystonesFromAddon()
+                end)
+            end
+        end
 
     elseif event == "ZONE_CHANGED_NEW_AREA" then
         -- Delay slightly to let party roster update after zone change
         C_Timer.After(0.5, function()
             AutoCapturePartyKeys()
             KeyRoll.MarkCacheDirty()
+            
+            -- Broadcast and request guild keystones after zone change
+            if IsInGuild() then
+                if KeyRoll.BroadcastKeystoneToGuild then
+                    C_Timer.After(1, function()
+                        KeyRoll.BroadcastKeystoneToGuild()
+                    end)
+                end
+                if KeyRoll.RequestGuildKeystonesFromAddon then
+                    C_Timer.After(2, function()
+                        KeyRoll.RequestGuildKeystonesFromAddon()
+                    end)
+                end
+            end
         end)
 
     elseif event == "BAG_UPDATE" then

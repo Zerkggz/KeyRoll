@@ -59,7 +59,7 @@ local function HandleReceivedKeystone(prefix, message, sender)
         if safeStore(KeyRoll.GetDungeonIDByName(dungeon), keyLevel) then return end
     end
 
-    -- Try AceSerializer (cross-faction)
+    -- Try AceSerializer
     if LibStub then
         local AceSerializer = LibStub("AceSerializer-3.0", true)
         if AceSerializer then
@@ -176,6 +176,38 @@ end
 local KeyRollComm = {}
 
 function KeyRollComm:OnCommReceived(prefix, message, distribution, sender)
+    -- Parse KeyRoll GUILD messages for guild keystone tracking
+    if prefix == "KeyRoll" and distribution == "GUILD" then
+        if KeyRoll.IsDebug() then
+            KeyRoll.DebugPrint("=== KeyRoll GUILD Message ===")
+            KeyRoll.DebugPrint("From:", sender)
+            KeyRoll.DebugPrint("Message:", message)
+        end
+        
+        -- Format: "UPDATE:CharName:CLASS:mapID:level"
+        local msgType, name, class, mapID, level = message:match("^(%w+):([^:]+):([^:]+):(%d+):(%d+)")
+        if msgType == "UPDATE" and name and mapID and level then
+            mapID, level = tonumber(mapID), tonumber(level)
+            if mapID and level then
+                KeyRoll.StoreGuildKey(name, mapID, level, class)
+                if KeyRoll.IsDebug() then
+                    KeyRoll.DebugPrint("KeyRoll update:", name, "has", KeyRoll.GetDungeonNameByID(mapID) or "Unknown", "+"..level)
+                end
+            end
+        end
+        
+        -- Format: "REQUEST" - someone is asking for keystones
+        if message == "REQUEST" then
+            if KeyRoll.IsDebug() then
+                KeyRoll.DebugPrint("KeyRoll guild request received, sending our keystone")
+            end
+            -- Broadcast our keystone if we have one
+            KeyRoll.BroadcastKeystoneToGuild()
+        end
+        
+        return
+    end
+    
     -- Parse AstralKeys GUILD messages for friend/guild keystone tracking
     if prefix == "AstralKeys" and distribution == "GUILD" then
         if KeyRoll.IsDebug() then
@@ -223,7 +255,6 @@ function KeyRollComm:OnCommReceived(prefix, message, distribution, sender)
             KeyRoll.DebugPrint("================================")
         end
         
-        -- Don't process GUILD messages as party keystones
         return
     end
     
@@ -235,10 +266,11 @@ function KeyRollComm:OnCommReceived(prefix, message, distribution, sender)
 end
 
 local ADDON_KEYROLL_PREFIXES = {
+    ["KeyRoll"]=true,  -- My addon for broadcasting
     ["BigWigs"]=true, ["BigWigsKey"]=true, ["DBM"]=true, ["DBM-Key"]=true,
     ["AngryKeystones"]=true, ["MDT"]=true, ["LibKS"]=true,
-    ["AstralKeys"]=true,
-    ["KCLib"]=true,
+    ["AstralKeys"]=true,  -- Astral Keys & Keystone Manager
+    ["KCLib"]=true,  -- Keystone Roll-Call
     ["OpenRaidLib"]=true, ["ORL"]=true,  -- Open Raid Library (Details!)
     ["KeystoneAnnounce"]=true,
     ["EQKS"]=true,  -- BigWigs Keystone Sharing (EuropaQKeystone)
@@ -291,19 +323,18 @@ end)
 local chatFrame = CreateFrame("Frame")
 chatFrame:RegisterEvent("CHAT_MSG_PARTY")
 chatFrame:RegisterEvent("CHAT_MSG_PARTY_LEADER")
+chatFrame:RegisterEvent("CHAT_MSG_GUILD")
+chatFrame:RegisterEvent("CHAT_MSG_OFFICER")
 
 chatFrame:SetScript("OnEvent", function(_, event, message, sender)
     if KeyRoll.IsDebug() then
-        KeyRoll.DebugPrint("Party chat received from:", sender, "Event:", event)
+        KeyRoll.DebugPrint("Chat received from:", sender, "Event:", event)
     end
     
-    -- Only process if in a party of 5 or less
-    if not KeyRoll.IsInRealParty() then return end
+    sender = Ambiguate(sender, "short")
     
     -- Check if message contains a keystone link
     if message and message:find("Keystone:") then
-        sender = Ambiguate(sender, "short")
-        
         -- Extract the keystone link
         local itemLink = message:match("(|c.-|h%[Keystone:.-%]|h|r)")
         if itemLink then
@@ -315,9 +346,45 @@ chatFrame:SetScript("OnEvent", function(_, event, message, sender)
                 local level = tonumber(keyLevel)
                 
                 if mapID and level then
-                    KeyRoll.StoreKey(sender, mapID, level)
-                    if KeyRoll.IsDebug() then
-                        KeyRoll.DebugPrint("Captured from chat:", sender, dungeonName, "+"..level)
+                    local isGuildMember = KeyRoll.IsGuildMember and KeyRoll.IsGuildMember(sender)
+                    local isPartyChat = (event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER")
+                    local isGuildChat = (event == "CHAT_MSG_GUILD" or event == "CHAT_MSG_OFFICER")
+                    local inParty = KeyRoll.IsInRealParty()
+                    
+                    -- Party chat handling
+                    if isPartyChat and inParty then
+                        KeyRoll.StoreKey(sender, mapID, level)
+                        if KeyRoll.IsDebug() then
+                            KeyRoll.DebugPrint("Captured from party chat:", sender, dungeonName, "+"..level)
+                        end
+                        
+                        -- Also store in guild cache if sender is a guild member
+                        if isGuildMember then
+                            KeyRoll.StoreGuildKey(sender, mapID, level)
+                            if KeyRoll.IsDebug() then
+                                KeyRoll.DebugPrint("Also stored in guild cache (guild member in party)")
+                            end
+                        end
+                    end
+                    
+                    -- Guild chat handling
+                    if isGuildChat and isGuildMember then
+                        KeyRoll.StoreGuildKey(sender, mapID, level)
+                        if KeyRoll.IsDebug() then
+                            KeyRoll.DebugPrint("Captured from guild chat:", sender, dungeonName, "+"..level)
+                        end
+                        
+                        -- Also store in party cache if in party together
+                        if inParty then
+                            -- Check if sender is actually in our current party
+                            local currentParty = KeyRoll.GetCurrentPartyMembers()
+                            if currentParty and currentParty[sender] then
+                                KeyRoll.StoreKey(sender, mapID, level)
+                                if KeyRoll.IsDebug() then
+                                    KeyRoll.DebugPrint("Also stored in party cache (guild member in current party)")
+                                end
+                            end
+                        end
                     end
                 end
             end
@@ -457,7 +524,7 @@ bnetFrame:SetScript("OnEvent", function(_, event, prefix, message, distribution,
     -- Try to get character name if we don't have it
     if not charName then
         -- BNet sender format is like "BNet-Account-123"
-        -- Need to look up their character name
+        -- We need to look up their character name
         charName = sender -- Fallback to BNet ID if we can't get character name
         
         -- Try to extract from Astral Keys format in message
@@ -508,7 +575,7 @@ bnetFrame:SetScript("OnEvent", function(_, event, prefix, message, distribution,
 end)
 
 -------------------------------------------------
--- Friend login detection - request keystones when friends come online
+-- Friend login detection
 -------------------------------------------------
 local friendLoginFrame = CreateFrame("Frame")
 friendLoginFrame:RegisterEvent("BN_FRIEND_ACCOUNT_ONLINE")
@@ -582,7 +649,7 @@ friendLoginFrame:SetScript("OnEvent", function(_, event, bnetIDAccount)
 end)
 
 -------------------------------------------------
--- Guild chat command system - request keystones via chat
+-- Guild chat command system
 -------------------------------------------------
 local guildChatFrame = CreateFrame("Frame")
 guildChatFrame:RegisterEvent("CHAT_MSG_GUILD")
@@ -710,6 +777,76 @@ KeyRoll.RequestFriendKeystones = RequestFriendKeystones
 KeyRoll.RequestGuildKeystones = RequestGuildKeystones
 KeyRoll.HandleReceivedKeystone = HandleReceivedKeystone
 
+-- Export friend message stats for debugging
 KeyRoll.GetFriendMessageStats = function()
     return friendMessageStats
 end
+
+-------------------------------------------------
+-- Guild Broadcasting
+-------------------------------------------------
+local lastGuildBroadcast = 0
+local GUILD_BROADCAST_COOLDOWN = 15  -- 15 seconds between broadcasts
+
+local function BroadcastKeystoneToGuild()
+    if not IsInGuild() then return end
+    
+    -- Throttle broadcasts
+    local now = GetTime()
+    if now - lastGuildBroadcast < GUILD_BROADCAST_COOLDOWN then
+        if KeyRoll.IsDebug() then
+            KeyRoll.DebugPrint("Guild broadcast on cooldown")
+        end
+        return
+    end
+    lastGuildBroadcast = now
+    
+    -- Get our current keystone from bag scan
+    if not C_Container then return end
+    
+    local playerName = Ambiguate(UnitName("player"), "short")
+    local _, class = UnitClass("player")
+    local mapID, level
+    
+    for bag = 0, 4 do
+        local numSlots = C_Container.GetContainerNumSlots(bag)
+        if numSlots and numSlots > 0 then
+            for slot = 1, numSlots do
+                local itemLink = C_Container.GetContainerItemLink(bag, slot)
+                if itemLink and itemLink:find("Keystone:") then
+                    local dungeonName, keyLevel = itemLink:match("%[Keystone:%s*(.-)%s*%((%d+)%)%]")
+                    if dungeonName and keyLevel then
+                        mapID = KeyRoll.GetDungeonIDByName(dungeonName)
+                        level = tonumber(keyLevel)
+                        if mapID and level then break end
+                    end
+                end
+            end
+        end
+        if mapID and level then break end
+    end
+    
+    -- Broadcast if we have a keystone
+    if mapID and level then
+        local message = string.format("UPDATE:%s:%s:%d:%d", playerName, class or "UNKNOWN", mapID, level)
+        AceComm:SendCommMessage("KeyRoll", message, "GUILD")
+        
+        if KeyRoll.IsDebug() then
+            KeyRoll.DebugPrint("Broadcasted to guild:", KeyRoll.GetDungeonNameByID(mapID), "+"..level)
+        end
+    end
+end
+
+-- Request keystones from all guild members running KeyRoll
+local function RequestGuildKeystonesFromAddon()
+    if not IsInGuild() then return end
+    
+    AceComm:SendCommMessage("KeyRoll", "REQUEST", "GUILD")
+    
+    if KeyRoll.IsDebug() then
+        KeyRoll.DebugPrint("Sent KeyRoll REQUEST to guild")
+    end
+end
+
+KeyRoll.BroadcastKeystoneToGuild = BroadcastKeystoneToGuild
+KeyRoll.RequestGuildKeystonesFromAddon = RequestGuildKeystonesFromAddon

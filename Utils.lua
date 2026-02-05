@@ -1,4 +1,3 @@
--- Ensure KeyRoll table exists
 KeyRoll = KeyRoll or {}
 
 -- Initialize account-wide saved variables
@@ -6,12 +5,12 @@ KeyRollGlobalDB = KeyRollGlobalDB or {}
 KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCache or {}
 KeyRollGlobalDB.friendCache = KeyRollGlobalDB.friendCache or {}
 KeyRollGlobalDB.myKeysCache = KeyRollGlobalDB.myKeysCache or {}
-KeyRollGlobalDB.partyCache = KeyRollGlobalDB.partyCache or {}  -- Persist party cache
+KeyRollGlobalDB.partyCache = KeyRollGlobalDB.partyCache or {}
 KeyRollGlobalDB.lastResetWeek = KeyRollGlobalDB.lastResetWeek or 0
 
 -- Initialize per-character saved variables
 KeyRollDB = KeyRollDB or {}
-KeyRollDB.cache = KeyRollDB.cache or {}  -- Legacy, migrated to partyCache
+KeyRollDB.cache = KeyRollDB.cache or {}
 
 -- Weekly reset detection and cache clearing
 -- US/Oceanic: Tuesday 15:00 UTC
@@ -37,6 +36,7 @@ local function GetCurrentWeek()
     
     -- Check if we've passed this week's reset
     if dateTable.wday < resetDay or (dateTable.wday == resetDay and dateTable.hour < resetHour) then
+        -- Haven't hit reset yet this week, so we're still in last week
         weeksSinceEpoch = weeksSinceEpoch - 1
     end
     
@@ -504,7 +504,7 @@ local function CreateStoredFrame()
     storedFrame.TitleText:SetText("|cff00ff00KeyRoll|r |cffffffffKeystones|r")
     storedFrame.TitleText:SetFont("Fonts\\FRIZQT__.TTF", 14, "OUTLINE")
 
-    -- Refresh button (next to close button)
+    -- Refresh button
     local refreshButton = CreateFrame("Button", nil, storedFrame)
     refreshButton:SetSize(24, 24)
     refreshButton:SetPoint("TOPRIGHT", storedFrame.CloseButton, "TOPLEFT", -2, 0)
@@ -517,10 +517,10 @@ local function CreateStoredFrame()
     -- Make the pushed texture darker/offset for click feedback
     local pushedTex = refreshButton:GetPushedTexture()
     if pushedTex then
-        pushedTex:SetVertexColor(0.5, 0.5, 0.5)
+        pushedTex:SetVertexColor(0.5, 0.5, 0.5)  -- Darker when pushed
     end
     
-    -- Enable button to depress when clicked
+    -- Enable button to actually depress when clicked
     refreshButton:SetButtonState("NORMAL")
     refreshButton:RegisterForClicks("LeftButtonUp")
     
@@ -549,9 +549,9 @@ local function CreateStoredFrame()
 
     local tabData = {
         {id="mykeys", label="My Keys", color={0.8, 0.2, 0.8}, x=10},      -- Purple
-        {id="party", label="Party", color={0.2, 0.5, 0.9}, x=110},        -- Blue (Blizzard party color)
-        {id="friends", label="Friends", color={0.9, 0.6, 0.2}, x=210},    -- Orange (Blizzard friends color)
-        {id="guild", label="Guild", color={0.2, 0.8, 0.2}, x=310}         -- Green (Blizzard guild color)
+        {id="party", label="Party", color={0.2, 0.5, 0.9}, x=110},        -- Blue
+        {id="friends", label="Friends", color={0.9, 0.6, 0.2}, x=210},    -- Orange
+        {id="guild", label="Guild", color={0.2, 0.8, 0.2}, x=310}         -- Green
     }
 
     for _, data in ipairs(tabData) do
@@ -603,7 +603,7 @@ local function CreateStoredFrame()
         storedFrame.tabs[data.id] = tab
     end
 
-    -- Key Roller tab (separate, on the right side) - Purple/Gold color
+    -- Key Roller tab - Purple/Gold color
     local rollerTab = CreateFrame("Button", nil, storedFrame, "BackdropTemplate")
     rollerTab:SetSize(95, 26)
     rollerTab:SetPoint("TOPRIGHT", -10, -35)  -- Right side
@@ -673,16 +673,20 @@ local function CreateStoredFrame()
     levelBtn:SetScript("OnLeave", function() if storedFrame.sortMode ~= "level" then levelBtn.text:SetTextColor(0.6, 0.6, 0.6) end end)
     storedFrame.sortButtons["level"] = levelBtn
     
+    -- Create sortPipes table
+    storedFrame.sortPipes = {}
+    
     -- First pipe
     local pipe1 = storedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     pipe1:SetPoint("TOPLEFT", 102, sortY)
     pipe1:SetText("|")
     pipe1:SetTextColor(0.4, 0.4, 0.4)
+    table.insert(storedFrame.sortPipes, pipe1)
     
     -- Character button
     local nameBtn = CreateFrame("Button", nil, storedFrame)
-    nameBtn:SetSize(60, 14)  -- Wider to fit "Character"
-    nameBtn:SetPoint("TOPLEFT", 114, sortY)  -- More space after pipe
+    nameBtn:SetSize(60, 14)
+    nameBtn:SetPoint("TOPLEFT", 114, sortY)
     nameBtn.text = nameBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     nameBtn.text:SetAllPoints()
     nameBtn.text:SetJustifyH("CENTER")
@@ -694,11 +698,12 @@ local function CreateStoredFrame()
     nameBtn:SetScript("OnLeave", function() if storedFrame.sortMode ~= "name" then nameBtn.text:SetTextColor(0.6, 0.6, 0.6) end end)
     storedFrame.sortButtons["name"] = nameBtn
     
-    -- Second pipe - further right
+    -- Second pipe
     local pipe2 = storedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     pipe2:SetPoint("TOPLEFT", 178, sortY)
     pipe2:SetText("|")
     pipe2:SetTextColor(0.4, 0.4, 0.4)
+    table.insert(storedFrame.sortPipes, pipe2)
     
     -- Dungeon button
     local dungeonBtn = CreateFrame("Button", nil, storedFrame)
@@ -804,6 +809,31 @@ local function CreateStoredFrame()
                 btn.text:SetTextColor(0.2, 1, 0.2)  -- Bright green for active
             else
                 btn.text:SetTextColor(0.6, 0.6, 0.6)  -- Gray for inactive
+            end
+        end
+        
+        -- Show/hide sort controls based on active tab
+        if self.activeTab == "roller" then
+            -- Hide sort controls on Key Roller tab only
+            if self.sortLabel then self.sortLabel:Hide() end
+            for _, btn in pairs(self.sortButtons) do
+                if btn then btn:Hide() end
+            end
+            if self.sortPipes then
+                for _, pipe in ipairs(self.sortPipes) do
+                    if pipe then pipe:Hide() end
+                end
+            end
+        else
+            -- Show sort controls on all other tabs (My Keys, Party, Friends, Guild)
+            if self.sortLabel then self.sortLabel:Show() end
+            for _, btn in pairs(self.sortButtons) do
+                if btn then btn:Show() end
+            end
+            if self.sortPipes then
+                for _, pipe in ipairs(self.sortPipes) do
+                    if pipe then pipe:Show() end
+                end
             end
         end
         
@@ -975,7 +1005,7 @@ local function CreateStoredFrame()
             
             self.rollButton:Show()
             self.rollResult:Show()
-            return
+            return  -- Skip normal key display
         end
         
         -- Hide roller button/result when not on roller tab
@@ -1413,7 +1443,6 @@ KeyRoll.MarkCacheDirty = MarkCacheDirty
 KeyRoll.StoreKey = StoreKey
 KeyRoll.StoreMyKey = StoreMyKey
 KeyRoll.StoreGuildKey = StoreGuildKey
-KeyRoll.GetDungeonNameByID = GetDungeonNameByID
 KeyRoll.PruneCache = PruneCache
 KeyRoll.GetRollableKeys = GetRollableKeys
 KeyRoll.SendMessage = SendMessage
