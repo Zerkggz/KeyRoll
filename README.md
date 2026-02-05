@@ -24,7 +24,7 @@ Designed for World of Warcraft: Midnight and later.
 * **Post-Dungeon Updates** - Automatically refreshes keystones 30 seconds after completing a dungeon
 * **Smart Cache** - Removes keys when players leave party, clears on weekly reset
 
-### GUI Window (`/keyroll stored`)
+### GUI Window (`/kr or /keyroll`)
 * **My Keys Tab** - View keystones from all your characters (account-wide)
 * **Party Tab** - Current party members' keystones
 * **Friends Tab** - Keystones from all Battle.net friends
