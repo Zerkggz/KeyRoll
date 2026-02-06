@@ -327,14 +327,24 @@ chatFrame:RegisterEvent("CHAT_MSG_GUILD")
 chatFrame:RegisterEvent("CHAT_MSG_OFFICER")
 
 chatFrame:SetScript("OnEvent", function(_, event, message, sender)
+    -- Validate parameters exist
+    if not message or not sender then
+        return
+    end
+    
+    -- Safely ambiguate sender name (can fail during tainted execution)
+    local success, ambiguatedName = pcall(Ambiguate, sender, "short")
+    if not success or not ambiguatedName then
+        return
+    end
+    sender = ambiguatedName
+    
     if KeyRoll.IsDebug() then
         KeyRoll.DebugPrint("Chat received from:", sender, "Event:", event)
     end
     
-    sender = Ambiguate(sender, "short")
-    
     -- Check if message contains a keystone link
-    if message and message:find("Keystone:") then
+    if message:find("Keystone:") then
         -- Extract the keystone link
         local itemLink = message:match("(|c.-|h%[Keystone:.-%]|h|r)")
         if itemLink then

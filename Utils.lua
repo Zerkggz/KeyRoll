@@ -2,7 +2,7 @@ KeyRoll = KeyRoll or {}
 
 -- Initialize account-wide saved variables
 KeyRollGlobalDB = KeyRollGlobalDB or {}
-KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCache or {}
+KeyRollGlobalDB.guildCaches = KeyRollGlobalDB.guildCaches or {}  -- Per-guild caches
 KeyRollGlobalDB.friendCache = KeyRollGlobalDB.friendCache or {}
 KeyRollGlobalDB.myKeysCache = KeyRollGlobalDB.myKeysCache or {}
 KeyRollGlobalDB.partyCache = KeyRollGlobalDB.partyCache or {}
@@ -11,6 +11,39 @@ KeyRollGlobalDB.lastResetWeek = KeyRollGlobalDB.lastResetWeek or 0
 -- Initialize per-character saved variables
 KeyRollDB = KeyRollDB or {}
 KeyRollDB.cache = KeyRollDB.cache or {}
+
+-- MIGRATION: Move old single guildCache to per-guild structure (BEFORE setting up pointers)
+local currentGuild = GetGuildInfo("player")
+if KeyRollGlobalDB.guildCache and not KeyRollGlobalDB._guildCacheMigrated then
+    -- Old structure exists, migrate it
+    local oldGuildName = KeyRollGlobalDB.lastGuildName or currentGuild
+    if oldGuildName then
+        -- Move old cache to the old guild's cache
+        KeyRollGlobalDB.guildCaches[oldGuildName] = KeyRollGlobalDB.guildCaches[oldGuildName] or {}
+        local migratedCount = 0
+        for k, v in pairs(KeyRollGlobalDB.guildCache) do
+            KeyRollGlobalDB.guildCaches[oldGuildName][k] = v
+            migratedCount = migratedCount + 1
+        end
+        
+        if KeyRoll and KeyRoll.Debug and migratedCount > 0 then
+            print("[KeyRoll] Migrated", migratedCount, "keystones from old structure to guild:", oldGuildName)
+        end
+    end
+    KeyRollGlobalDB._guildCacheMigrated = true
+end
+
+-- Get current guild and set up guild-specific cache
+if currentGuild then
+    -- Initialize this guild's cache if it doesn't exist
+    KeyRollGlobalDB.guildCaches[currentGuild] = KeyRollGlobalDB.guildCaches[currentGuild] or {}
+    -- Point guildCache to the current guild's cache
+    KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches[currentGuild]
+else
+    -- Not in a guild - use a special empty cache for guildless characters
+    KeyRollGlobalDB.guildCaches["_noguild_"] = {}
+    KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches["_noguild_"]
+end
 
 -- Weekly reset detection and cache clearing
 -- US/Oceanic: Tuesday 15:00 UTC
@@ -46,11 +79,15 @@ end
 -- Check if we need to clear caches due to weekly reset
 local currentWeek = GetCurrentWeek()
 if KeyRollGlobalDB.lastResetWeek < currentWeek then
-    -- New week! Clear guild and friend caches (keystones changed)
-    local guildCount = 0
-    for k in pairs(KeyRollGlobalDB.guildCache) do
-        guildCount = guildCount + 1
-        KeyRollGlobalDB.guildCache[k] = nil
+    -- New week! Clear all guild caches and friend caches (keystones changed)
+    local totalGuildCount = 0
+    for guildName, guildCache in pairs(KeyRollGlobalDB.guildCaches) do
+        local guildCount = 0
+        for k in pairs(guildCache) do
+            guildCount = guildCount + 1
+            totalGuildCount = totalGuildCount + 1
+            guildCache[k] = nil
+        end
     end
     
     local friendCount = 0
@@ -75,7 +112,7 @@ if KeyRollGlobalDB.lastResetWeek < currentWeek then
     
     if KeyRoll and KeyRoll.Debug then
         print("[KeyRoll] Weekly reset detected! Cleared caches:")
-        print("  Guild keystones removed:", guildCount)
+        print("  Guild keystones removed:", totalGuildCount)
         print("  Friend keystones removed:", friendCount)
         print("  My Keys removed:", myKeysCount)
         print("  Party keystones removed:", partyCount)
@@ -366,6 +403,17 @@ local function StoreGuildKey(sender, mapID, level, class)
     if not sender or type(mapID) ~= "number" or mapID <= 0 or type(level) ~= "number" or level <= 0 then
         return
     end
+    
+    -- Ensure guild cache structure exists and is pointing to the right place
+    KeyRollGlobalDB.guildCaches = KeyRollGlobalDB.guildCaches or {}
+    local currentGuild = GetGuildInfo("player")
+    if currentGuild then
+        KeyRollGlobalDB.guildCaches[currentGuild] = KeyRollGlobalDB.guildCaches[currentGuild] or {}
+        KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches[currentGuild]
+    else
+        KeyRollGlobalDB.guildCaches["_noguild_"] = KeyRollGlobalDB.guildCaches["_noguild_"] or {}
+        KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches["_noguild_"]
+    end
 
     sender = Ambiguate(sender, "short")
     local dungeon = KeyRoll.GetDungeonNameByID(mapID) or ("Unknown (" .. tostring(mapID) .. ")")
@@ -391,6 +439,19 @@ local function StoreGuildKey(sender, mapID, level, class)
         time = time(),
         source = "astralkeys", -- Mark that this came from Astral Keys
     }
+    
+    -- Also update friend cache if this person is a friend (keeps data in sync)
+    if KeyRollGlobalDB.friendCache[sender] then
+        KeyRollGlobalDB.friendCache[sender] = {
+            name = sender,
+            class = class,
+            mapID = mapID,
+            level = level,
+            dungeon = dungeon,
+            time = time(),
+            source = "guild", -- Updated from guild broadcast
+        }
+    end
 
     RefreshStoredFrame()
 end
@@ -783,6 +844,19 @@ local function CreateStoredFrame()
 
     -- Refresh function
     function storedFrame:Refresh()
+        -- Ensure guild cache structure exists
+        KeyRollGlobalDB.guildCaches = KeyRollGlobalDB.guildCaches or {}
+        
+        -- Ensure guild cache pointer is set up correctly
+        local currentGuild = GetGuildInfo("player")
+        if currentGuild then
+            KeyRollGlobalDB.guildCaches[currentGuild] = KeyRollGlobalDB.guildCaches[currentGuild] or {}
+            KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches[currentGuild]
+        else
+            KeyRollGlobalDB.guildCaches["_noguild_"] = KeyRollGlobalDB.guildCaches["_noguild_"] or {}
+            KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches["_noguild_"]
+        end
+        
         if IsDebug() then
             DebugPrint("=== Refresh() called ===")
             DebugPrint("Current activeTab:", self.activeTab or "nil")
@@ -858,7 +932,38 @@ local function CreateStoredFrame()
         elseif self.activeTab == "party" then
             keys = GetRollableKeys()
         elseif self.activeTab == "guild" then
-            for _, key in pairs(KeyRollGlobalDB.guildCache) do
+            if IsDebug() then
+                DebugPrint("=== Loading Guild Tab ===")
+                local guildName = GetGuildInfo("player")
+                if guildName then
+                    DebugPrint("Current guild:", guildName)
+                else
+                    DebugPrint("Not in a guild")
+                end
+                
+                -- Show which guild caches exist
+                if KeyRollGlobalDB.guildCaches then
+                    DebugPrint("Available guild caches:")
+                    for gName, gCache in pairs(KeyRollGlobalDB.guildCaches) do
+                        local count = 0
+                        for _ in pairs(gCache) do count = count + 1 end
+                        DebugPrint("  ", gName, "has", count, "keys")
+                    end
+                else
+                    DebugPrint("WARNING: KeyRollGlobalDB.guildCaches is nil!")
+                end
+                
+                -- Show what we're about to display
+                if KeyRollGlobalDB.guildCache then
+                    local currentCacheCount = 0
+                    for _ in pairs(KeyRollGlobalDB.guildCache) do currentCacheCount = currentCacheCount + 1 end
+                    DebugPrint("Displaying", currentCacheCount, "keys from current cache")
+                else
+                    DebugPrint("WARNING: KeyRollGlobalDB.guildCache is nil!")
+                end
+            end
+            
+            for _, key in pairs(KeyRollGlobalDB.guildCache or {}) do
                 table.insert(keys, key)
             end
         elseif self.activeTab == "friends" then
@@ -1005,7 +1110,21 @@ local function CreateStoredFrame()
             
             self.rollButton:Show()
             self.rollResult:Show()
+            
+            -- Hide empty message when on Key Roller tab
+            if self.emptyMessage then
+                self.emptyMessage:Hide()
+            end
+            
             return  -- Skip normal key display
+        end
+        
+        -- Hide roll button and result when not on Key Roller tab
+        if self.rollButton then
+            self.rollButton:Hide()
+        end
+        if self.rollResult then
+            self.rollResult:Hide()
         end
         
         -- Hide roller button/result when not on roller tab
@@ -1047,6 +1166,12 @@ local function CreateStoredFrame()
         end
         
         local totalHeight = #keys * (self.rowHeight + self.rowGap)
+        
+        -- Ensure minimum height when showing empty message
+        if #keys == 0 then
+            totalHeight = 200  -- Minimum height for empty message
+        end
+        
         self.content:SetSize(self.rowWidth, totalHeight)
 
         -- Display keys with color coding - create rows as needed
@@ -1102,21 +1227,35 @@ local function CreateStoredFrame()
             end
         end
         
+        -- Hide/show empty message
+        if not self.emptyMessage then
+            self.emptyMessage = self.content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
+            self.emptyMessage:SetPoint("TOP", 0, -50)
+            self.emptyMessage:SetSize(self.rowWidth - 40, 100)
+            self.emptyMessage:SetJustifyH("CENTER")
+            self.emptyMessage:SetJustifyV("TOP")
+            self.emptyMessage:SetFont("Fonts\\FRIZQT__.TTF", 14)
+        end
+        
         -- Show "No keys" message if empty
         if #keys == 0 then
-            local row = self.rows[1]
-            if row then
-                local msg
-                if self.activeTab == "party" then
-                    msg = "|cffaaaaaa No party keystones found. Ask players to link keys.|r"
-                elseif self.activeTab == "guild" then
-                    msg = "|cffaaaaaa No guild keystones found.\nInvite guild members to party or have them install Astral Keys.|r"
-                elseif self.activeTab == "friends" then
-                    msg = "|cffaaaaaa No friend keystones found.\nFriends must have a keystone addon installed (Astral Keys, BigWigs, DBM, etc.)|r"
+            local msg
+            if self.activeTab == "party" then
+                msg = "|cffaaaaaa No party keystones found. Ask players to link keys.|r"
+            elseif self.activeTab == "guild" then
+                if IsInGuild() then
+                    msg = "|cffaaaaaa No guild keystones found.\nInvite guild members to party or have them install KeyRoll.|r"
+                else
+                    msg = "|cffaaaaaa Join a guild to see guild member keystones.|r"
                 end
-                row.text:SetText(msg)
-                row:Show()
+            elseif self.activeTab == "friends" then
+                msg = "|cffaaaaaa No friend keystones found.\nFriends must have a keystone addon installed (Astral Keys, BigWigs, DBM, etc.)|r"
             end
+            
+            self.emptyMessage:SetText(msg)
+            self.emptyMessage:Show()
+        else
+            self.emptyMessage:Hide()
         end
     end
 end

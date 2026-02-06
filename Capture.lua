@@ -42,9 +42,20 @@ local function CaptureMyKeystone()
             KeyRoll.DebugPrint("Captured from bag:", KeyRoll.GetDungeonNameByID(mapID), "+" .. level)
         end
         
-        -- Broadcast to guild if we're in one
-        if IsInGuild() and KeyRoll.BroadcastKeystoneToGuild then
-            KeyRoll.BroadcastKeystoneToGuild()
+        -- Store in guild cache if we're in a guild
+        if IsInGuild() then
+            local _, class = UnitClass("player")
+            if KeyRoll.StoreGuildKey then
+                KeyRoll.StoreGuildKey(playerName, mapID, level, class)
+                if KeyRoll.IsDebug() then
+                    KeyRoll.DebugPrint("Stored in guild cache")
+                end
+            end
+            
+            -- Also broadcast to guild
+            if KeyRoll.BroadcastKeystoneToGuild then
+                KeyRoll.BroadcastKeystoneToGuild()
+            end
         end
         
         return true
