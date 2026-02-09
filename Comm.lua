@@ -17,15 +17,20 @@ local function RequestPartyKeystones(force, silent)
     local addons = {
         ["BigWigs"]="REQUEST_KEYS", ["BigWigsKey"]="REQUEST",
         ["DBM"]="KEY_REQUEST", ["DBM-Key"]="REQUEST",
-        ["AngryKeystones"]="REQUEST", ["MDT"]="REQUEST_KEYS"
+        ["AngryKeystones"]="REQUEST", ["MDT"]="REQUEST_KEYS",
+        ["AstralKeys"]="REQUEST"
     }
 
     for prefix, msg in pairs(addons) do
         pcall(C_ChatInfo.SendAddonMessage, prefix, msg, "PARTY")
     end
     
+    -- Also broadcast our own keystone to party and friends
+    KeyRoll.BroadcastKeystoneToParty()
+    KeyRoll.BroadcastKeystoneToFriends()
+    
     if KeyRoll.IsDebug() then
-        KeyRoll.DebugPrint("Sent keystone requests to party (6 addon prefixes)")
+        KeyRoll.DebugPrint("Sent keystone requests to party (7 addon prefixes)")
     end
 end
 
@@ -184,14 +189,15 @@ function KeyRollComm:OnCommReceived(prefix, message, distribution, sender)
             KeyRoll.DebugPrint("Message:", message)
         end
         
-        -- Format: "UPDATE:CharName:CLASS:mapID:level"
+        -- Format: "UPDATE:CharName-Realm:CLASS:mapID:level"
         local msgType, name, class, mapID, level = message:match("^(%w+):([^:]+):([^:]+):(%d+):(%d+)")
         if msgType == "UPDATE" and name and mapID and level then
             mapID, level = tonumber(mapID), tonumber(level)
             if mapID and level then
-                KeyRoll.StoreGuildKey(name, mapID, level, class)
+                -- Use sender parameter which includes realm
+                KeyRoll.StoreGuildKey(sender, mapID, level, class)
                 if KeyRoll.IsDebug() then
-                    KeyRoll.DebugPrint("KeyRoll update:", name, "has", KeyRoll.GetDungeonNameByID(mapID) or "Unknown", "+"..level)
+                    KeyRoll.DebugPrint("KeyRoll update:", sender, "has", KeyRoll.GetDungeonNameByID(mapID) or "Unknown", "+"..level)
                 end
             end
         end
@@ -203,6 +209,41 @@ function KeyRollComm:OnCommReceived(prefix, message, distribution, sender)
             end
             -- Broadcast our keystone if we have one
             KeyRoll.BroadcastKeystoneToGuild()
+            KeyRoll.BroadcastKeystoneToFriends()
+        end
+        
+        return
+    end
+    
+    -- Parse KeyRoll PARTY messages for party keystone tracking
+    if prefix == "KeyRoll" and distribution == "PARTY" then
+        if KeyRoll.IsDebug() then
+            KeyRoll.DebugPrint("=== KeyRoll PARTY Message ===")
+            KeyRoll.DebugPrint("From:", sender)
+            KeyRoll.DebugPrint("Message:", message)
+        end
+        
+        -- Format: "UPDATE:CharName-Realm:CLASS:mapID:level"
+        local msgType, name, class, mapID, level = message:match("^(%w+):([^:]+):([^:]+):(%d+):(%d+)")
+        if msgType == "UPDATE" and name and mapID and level then
+            mapID, level = tonumber(mapID), tonumber(level)
+            if mapID and level then
+                -- Use sender parameter which includes realm
+                KeyRoll.StoreKey(sender, mapID, level)
+                if KeyRoll.IsDebug() then
+                    KeyRoll.DebugPrint("KeyRoll party update:", sender, "has", KeyRoll.GetDungeonNameByID(mapID) or "Unknown", "+"..level)
+                end
+            end
+        end
+        
+        -- Format: "REQUEST" - someone is asking for keystones
+        if message == "REQUEST" then
+            if KeyRoll.IsDebug() then
+                KeyRoll.DebugPrint("KeyRoll party request received, sending our keystone")
+            end
+            -- Broadcast our keystone
+            KeyRoll.BroadcastKeystoneToParty()
+            KeyRoll.BroadcastKeystoneToFriends()
         end
         
         return
@@ -544,12 +585,17 @@ bnetFrame:SetScript("OnEvent", function(_, event, prefix, message, distribution,
         end
     end
     
-    charName = Ambiguate(charName, "short")
+    -- Keep full name with realm
+    local fullName = charName
+    local shortName = Ambiguate(charName, "short")
+    local realm = charName:match("%-(.+)$")
     local dungeon = KeyRoll.GetDungeonNameByID(mapID) or ("Unknown (" .. tostring(mapID) .. ")")
     
     -- Store in friend cache
-    KeyRollGlobalDB.friendCache[charName] = {
-        name = charName,
+    KeyRollGlobalDB.friendCache[shortName] = {
+        name = shortName,
+        fullName = fullName,
+        realm = realm,
         class = class,  -- May be nil for non-Astral Keys
         mapID = mapID,
         level = keyLevel,
@@ -559,8 +605,8 @@ bnetFrame:SetScript("OnEvent", function(_, event, prefix, message, distribution,
     }
     
     -- Also store in guild cache if friend is a guild member
-    if KeyRoll.IsGuildMember and KeyRoll.IsGuildMember(charName) then
-        KeyRoll.StoreGuildKey(charName, mapID, keyLevel, class)
+    if KeyRoll.IsGuildMember and KeyRoll.IsGuildMember(shortName) then
+        KeyRoll.StoreGuildKey(fullName, mapID, keyLevel, class)
         if KeyRoll.IsDebug() then
             KeyRoll.DebugPrint("Also stored in guild cache (friend is guild member)")
         end
@@ -814,7 +860,16 @@ local function BroadcastKeystoneToGuild()
     -- Get our current keystone from bag scan
     if not C_Container then return end
     
-    local playerName = Ambiguate(UnitName("player"), "short")
+    -- Get full name with realm
+    local success, fullPlayerName, realm = pcall(UnitFullName, "player")
+    local playerName
+    if success and fullPlayerName and realm then
+        playerName = fullPlayerName .. "-" .. realm
+    else
+        -- Fallback to short name if UnitFullName fails
+        playerName = Ambiguate(UnitName("player"), "short")
+    end
+    
     local _, class = UnitClass("player")
     local mapID, level
     
@@ -858,5 +913,139 @@ local function RequestGuildKeystonesFromAddon()
     end
 end
 
+-------------------------------------------------
+-- Broadcast keystone to party
+-------------------------------------------------
+local lastPartyBroadcast = 0
+local PARTY_BROADCAST_COOLDOWN = 5  -- 5 seconds cooldown
+
+local function BroadcastKeystoneToParty()
+    if not KeyRoll.IsInRealParty() then return end
+    
+    -- Throttle broadcasts
+    local now = GetTime()
+    if now - lastPartyBroadcast < PARTY_BROADCAST_COOLDOWN then
+        if KeyRoll.IsDebug() then
+            KeyRoll.DebugPrint("Party broadcast on cooldown")
+        end
+        return
+    end
+    lastPartyBroadcast = now
+    
+    -- Get our current keystone from bag scan
+    if not C_Container then return end
+    
+    -- Get full name with realm
+    local success, fullPlayerName, realm = pcall(UnitFullName, "player")
+    local playerName
+    if success and fullPlayerName and realm then
+        playerName = fullPlayerName .. "-" .. realm
+    else
+        playerName = Ambiguate(UnitName("player"), "short")
+    end
+    
+    local _, class = UnitClass("player")
+    local mapID, level
+    
+    for bag = 0, 4 do
+        local numSlots = C_Container.GetContainerNumSlots(bag)
+        if numSlots and numSlots > 0 then
+            for slot = 1, numSlots do
+                local itemLink = C_Container.GetContainerItemLink(bag, slot)
+                if itemLink and itemLink:find("Keystone:") then
+                    local dungeonName, keyLevel = itemLink:match("%[Keystone:%s*(.-)%s*%((%d+)%)%]")
+                    if dungeonName and keyLevel then
+                        mapID = KeyRoll.GetDungeonIDByName(dungeonName)
+                        level = tonumber(keyLevel)
+                        if mapID and level then break end
+                    end
+                end
+            end
+        end
+        if mapID and level then break end
+    end
+    
+    -- Broadcast if we have a keystone
+    if mapID and level then
+        local message = string.format("UPDATE:%s:%s:%d:%d", playerName, class or "UNKNOWN", mapID, level)
+        AceComm:SendCommMessage("KeyRoll", message, "PARTY")
+        
+        if KeyRoll.IsDebug() then
+            KeyRoll.DebugPrint("Broadcasted to party:", KeyRoll.GetDungeonNameByID(mapID), "+"..level)
+        end
+    end
+end
+
+-------------------------------------------------
+-- Broadcast keystone to friends
+-------------------------------------------------
+local lastFriendBroadcast = 0
+local FRIEND_BROADCAST_COOLDOWN = 30  -- 30 seconds cooldown
+
+local function BroadcastKeystoneToFriends()
+    -- Throttle broadcasts
+    local now = GetTime()
+    if now - lastFriendBroadcast < FRIEND_BROADCAST_COOLDOWN then
+        if KeyRoll.IsDebug() then
+            KeyRoll.DebugPrint("Friend broadcast on cooldown")
+        end
+        return
+    end
+    lastFriendBroadcast = now
+    
+    -- Get our current keystone from bag scan
+    if not C_Container then return end
+    
+    -- Get full name with realm
+    local success, fullPlayerName, realm = pcall(UnitFullName, "player")
+    local playerName
+    if success and fullPlayerName and realm then
+        playerName = fullPlayerName .. "-" .. realm
+    else
+        playerName = Ambiguate(UnitName("player"), "short")
+    end
+    
+    local _, class = UnitClass("player")
+    local mapID, level
+    
+    for bag = 0, 4 do
+        local numSlots = C_Container.GetContainerNumSlots(bag)
+        if numSlots and numSlots > 0 then
+            for slot = 1, numSlots do
+                local itemLink = C_Container.GetContainerItemLink(bag, slot)
+                if itemLink and itemLink:find("Keystone:") then
+                    local dungeonName, keyLevel = itemLink:match("%[Keystone:%s*(.-)%s*%((%d+)%)%]")
+                    if dungeonName and keyLevel then
+                        mapID = KeyRoll.GetDungeonIDByName(dungeonName)
+                        level = tonumber(keyLevel)
+                        if mapID and level then break end
+                    end
+                end
+            end
+        end
+        if mapID and level then break end
+    end
+    
+    -- Broadcast if we have a keystone - send to all online friends
+    if mapID and level then
+        local message = string.format("UPDATE:%s:%s:%d:%d", playerName, class or "UNKNOWN", mapID, level)
+        
+        local _, numBNetOnline = BNGetNumFriends()
+        for i = 1, numBNetOnline do
+            local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
+            if accountInfo and accountInfo.gameAccountInfo and accountInfo.gameAccountInfo.isOnline then
+                -- Send to each online friend
+                BNSendGameData(accountInfo.bnetAccountID, "KeyRoll", message)
+            end
+        end
+        
+        if KeyRoll.IsDebug() then
+            KeyRoll.DebugPrint("Broadcasted to friends:", KeyRoll.GetDungeonNameByID(mapID), "+"..level)
+        end
+    end
+end
+
 KeyRoll.BroadcastKeystoneToGuild = BroadcastKeystoneToGuild
+KeyRoll.BroadcastKeystoneToParty = BroadcastKeystoneToParty
+KeyRoll.BroadcastKeystoneToFriends = BroadcastKeystoneToFriends
 KeyRoll.RequestGuildKeystonesFromAddon = RequestGuildKeystonesFromAddon

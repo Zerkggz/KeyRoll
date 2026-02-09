@@ -344,7 +344,27 @@ local function StoreKey(sender, mapID, level)
         return
     end
 
-    sender = Ambiguate(sender, "short")
+    -- Store full name with realm, extract short name
+    local fullName = sender
+    local shortName = Ambiguate(sender, "short")
+    local realm = sender:match("%-(.+)$")  -- Extract realm if present
+    
+    -- If no realm in sender, try to get from party unit
+    if not realm then
+        for i = 1, GetNumSubgroupMembers() do
+            local unit = "party"..i
+            if UnitExists(unit) then
+                -- Use pcall to safely handle UnitFullName (can fail during combat/taint)
+                local success, unitName, unitRealm = pcall(UnitFullName, unit)
+                if success and unitName and Ambiguate(unitName, "short") == shortName and unitRealm then
+                    realm = unitRealm
+                    fullName = shortName .. "-" .. realm
+                    break
+                end
+            end
+        end
+    end
+    
     local dungeon = KeyRoll.GetDungeonNameByID(mapID) or ("Unknown (" .. tostring(mapID) .. ")")
     
     -- Get class info for the player
@@ -353,15 +373,17 @@ local function StoreKey(sender, mapID, level)
         -- Try to get from party
         for i = 1, GetNumSubgroupMembers() do
             local unit = "party"..i
-            if UnitExists(unit) and Ambiguate(UnitName(unit), "short") == sender then
+            if UnitExists(unit) and Ambiguate(UnitName(unit), "short") == shortName then
                 _, class = UnitClass(unit)
                 break
             end
         end
     end
 
-    cache[sender] = {
-        name = sender,
+    cache[shortName] = {
+        name = shortName,
+        fullName = fullName,
+        realm = realm,
         class = class,
         mapID = mapID,
         level = level,
@@ -371,14 +393,16 @@ local function StoreKey(sender, mapID, level)
     
     -- If this is the player's own key, also store in My Keys cache
     local playerName = Ambiguate(UnitName("player"), "short")
-    if sender == playerName then
+    if shortName == playerName then
         StoreMyKey(mapID, level)
     end
 
     -- If this player is also a guild member, store in guild cache too
-    if IsGuildMember(sender) then
-        KeyRollGlobalDB.guildCache[sender] = {
-            name = sender,
+    if IsGuildMember(shortName) then
+        KeyRollGlobalDB.guildCache[shortName] = {
+            name = shortName,
+            fullName = fullName,
+            realm = realm,
             class = class,
             mapID = mapID,
             level = level,
@@ -387,13 +411,13 @@ local function StoreKey(sender, mapID, level)
             source = "party", -- Mark that this came from party, not Astral Keys
         }
         if IsDebug() then
-            DebugPrint("Stored guild member keystone from party:", sender, dungeon, "+"..level)
+            DebugPrint("Stored guild member keystone from party:", shortName, dungeon, "+"..level)
         end
     end
 
     MarkCacheDirty()
     if IsInRealParty() and IsDebug() then
-        DebugPrint("Stored keystone:", sender, dungeon, "+"..level)
+        DebugPrint("Stored keystone:", shortName, dungeon, "+"..level)
     end
 
     RefreshStoredFrame()
@@ -411,11 +435,15 @@ local function StoreGuildKey(sender, mapID, level, class)
         KeyRollGlobalDB.guildCaches[currentGuild] = KeyRollGlobalDB.guildCaches[currentGuild] or {}
         KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches[currentGuild]
     else
-        KeyRollGlobalDB.guildCaches["_noguild_"] = KeyRollGlobalDB.guildCaches["_noguild_"] or {}
-        KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches["_noguild_"]
+        -- Not in a guild - don't store guild keys
+        return
     end
 
-    sender = Ambiguate(sender, "short")
+    -- Store full name with realm, extract short name
+    local fullName = sender
+    local shortName = Ambiguate(sender, "short")
+    local realm = sender:match("%-(.+)$")  -- Extract realm if present
+    
     local dungeon = KeyRoll.GetDungeonNameByID(mapID) or ("Unknown (" .. tostring(mapID) .. ")")
     
     -- If class not provided, try to get from guild roster
@@ -423,15 +451,17 @@ local function StoreGuildKey(sender, mapID, level, class)
         local numTotalMembers = GetNumGuildMembers()
         for i = 1, numTotalMembers do
             local name, _, _, _, classFileName = GetGuildRosterInfo(i)
-            if name and Ambiguate(name, "short") == sender then
+            if name and Ambiguate(name, "short") == shortName then
                 class = classFileName
                 break
             end
         end
     end
 
-    KeyRollGlobalDB.guildCache[sender] = {
-        name = sender,
+    KeyRollGlobalDB.guildCache[shortName] = {
+        name = shortName,
+        fullName = fullName,
+        realm = realm,
         class = class,
         mapID = mapID,
         level = level,
@@ -440,10 +470,26 @@ local function StoreGuildKey(sender, mapID, level, class)
         source = "astralkeys", -- Mark that this came from Astral Keys
     }
     
-    -- Also update friend cache if this person is a friend (keeps data in sync)
-    if KeyRollGlobalDB.friendCache[sender] then
-        KeyRollGlobalDB.friendCache[sender] = {
-            name = sender,
+    -- Check if this person is a Battle.net friend and add to friend cache
+    local isBNetFriend = false
+    local _, numBNetOnline = BNGetNumFriends()
+    for i = 1, numBNetOnline do
+        local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
+        if accountInfo and accountInfo.gameAccountInfo then
+            local characterName = accountInfo.gameAccountInfo.characterName
+            if characterName and Ambiguate(characterName, "short") == shortName then
+                isBNetFriend = true
+                break
+            end
+        end
+    end
+    
+    -- Update friend cache if this person is a Battle.net friend
+    if isBNetFriend then
+        KeyRollGlobalDB.friendCache[shortName] = {
+            name = shortName,
+            fullName = fullName,
+            realm = realm,
             class = class,
             mapID = mapID,
             level = level,
@@ -458,6 +504,138 @@ end
 
 KeyRoll.StoreKey = StoreKey
 KeyRoll.StoreGuildKey = StoreGuildKey
+
+-------------------------------------------------
+-- Format character name with realm if cross-realm
+-------------------------------------------------
+local function FormatCharacterName(nameOrData)
+    -- Get current player's realm
+    local _, currentRealm = UnitFullName("player")
+    
+    local name, realm
+    
+    -- Check if input is a table (keystone data object)
+    if type(nameOrData) == "table" then
+        name = nameOrData.name
+        realm = nameOrData.realm
+        -- If realm field exists and is populated, use it
+        if not realm and nameOrData.fullName then
+            realm = nameOrData.fullName:match("%-(.+)$")
+        end
+    else
+        -- Input is a string - parse it
+        local fullName = nameOrData
+        name, realm = fullName:match("^([^%-]+)%-(.+)$")
+        if not name then
+            name = fullName
+            realm = nil
+        end
+    end
+    
+    -- If realm exists and is different from current player's realm, show it
+    if realm and realm ~= currentRealm then
+        return string.format("%s |cff888888(%s)|r", name, realm)
+    else
+        return name
+    end
+end
+
+KeyRoll.FormatCharacterName = FormatCharacterName
+
+-------------------------------------------------
+-- Check if a character is online
+-------------------------------------------------
+local function IsCharacterOnline(charName, tabType)
+    local shortName = Ambiguate(charName, "short")
+    
+    -- For My Keys tab - check if any of your characters are online
+    if tabType == "mykeys" then
+        -- Your current character is always online
+        local playerName = Ambiguate(UnitName("player"), "short")
+        if shortName == playerName then
+            return true
+        end
+        -- Other characters are offline (can't tell if they're online on another account)
+        return false
+    end
+    
+    -- For Party tab - check party members
+    if tabType == "party" then
+        if UnitExists("player") and Ambiguate(UnitName("player"), "short") == shortName then
+            return true
+        end
+        for i = 1, GetNumSubgroupMembers() do
+            local unit = "party"..i
+            if UnitExists(unit) and Ambiguate(UnitName(unit), "short") == shortName then
+                return true
+            end
+        end
+        return false
+    end
+    
+    -- For Guild tab - check guild roster (wrapped in pcall for combat safety)
+    if tabType == "guild" and IsInGuild() then
+        -- Current player is always online
+        local playerName = Ambiguate(UnitName("player"), "short")
+        if shortName == playerName then
+            return true
+        end
+        
+        -- First check if they're an online Battle.net friend (more reliable)
+        local success, _, numBNetOnline = pcall(BNGetNumFriends)
+        if success and numBNetOnline then
+            for i = 1, numBNetOnline do
+                local success2, accountInfo = pcall(C_BattleNet.GetFriendAccountInfo, i)
+                if success2 and accountInfo and accountInfo.gameAccountInfo and accountInfo.gameAccountInfo.isOnline then
+                    local characterName = accountInfo.gameAccountInfo.characterName
+                    if characterName and Ambiguate(characterName, "short") == shortName then
+                        return true  -- Friend is online
+                    end
+                end
+            end
+        end
+        
+        -- Fall back to guild roster check
+        local success, numTotal = pcall(GetNumGuildMembers)
+        if not success then
+            return true  -- Default to online if check fails
+        end
+        
+        for i = 1, numTotal do
+            local success2, name, _, _, _, _, _, _, online = pcall(GetGuildRosterInfo, i)
+            if success2 and name and Ambiguate(name, "short") == shortName then
+                return online == true
+            end
+        end
+        return false
+    end
+    
+    -- For Friends tab - check Battle.net friends (wrapped in pcall for combat safety)
+    if tabType == "friends" then
+        local success, _, numBNetOnline = pcall(BNGetNumFriends)
+        if not success then
+            return true  -- Default to online if check fails
+        end
+        
+        for i = 1, numBNetOnline do
+            local success2, accountInfo = pcall(C_BattleNet.GetFriendAccountInfo, i)
+            if success2 and accountInfo and accountInfo.gameAccountInfo and accountInfo.gameAccountInfo.isOnline then
+                local characterName = accountInfo.gameAccountInfo.characterName
+                if characterName then
+                    local friendShortName = Ambiguate(characterName, "short")
+                    if friendShortName == shortName then
+                        return true
+                    end
+                end
+            end
+        end
+        return false
+    end
+    
+    return true -- Default to online if we can't determine
+end
+
+KeyRoll.IsCharacterOnline = IsCharacterOnline
 
 -------------------------------------------------
 -- Cache pruning (explicit)
@@ -853,8 +1031,8 @@ local function CreateStoredFrame()
             KeyRollGlobalDB.guildCaches[currentGuild] = KeyRollGlobalDB.guildCaches[currentGuild] or {}
             KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches[currentGuild]
         else
-            KeyRollGlobalDB.guildCaches["_noguild_"] = KeyRollGlobalDB.guildCaches["_noguild_"] or {}
-            KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches["_noguild_"]
+            -- Always use empty cache for guildless characters (don't persist)
+            KeyRollGlobalDB.guildCache = {}
         end
         
         if IsDebug() then
@@ -1206,16 +1384,28 @@ local function CreateStoredFrame()
                     end
                 end
                 
+                -- Format name with realm if cross-realm
+                local displayName = KeyRoll.FormatCharacterName(data)
+                
                 -- Format with class-colored name
                 text = string.format(
                     "%s%s|r - %s %s+%d|r",
                     nameColor,
-                    data.name,
+                    displayName,
                     data.dungeon or KeyRoll.GetDungeonNameByID(data.mapID) or ("Unknown (" .. tostring(data.mapID) .. ")"),
                     levelColor,
                     data.level
                 )
                 row.text:SetText(text)
+                
+                -- Check if character is online and adjust alpha
+                local isOnline = KeyRoll.IsCharacterOnline(data.name, self.activeTab)
+                if isOnline then
+                    row:SetAlpha(1.0)  -- Full opacity for online
+                else
+                    row:SetAlpha(0.4)  -- 40% opacity for offline
+                end
+                
                 row:Show()
             end
         end

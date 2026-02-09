@@ -37,7 +37,9 @@ local function CaptureMyKeystone()
     end
 
     if mapID and level then
-        KeyRoll.StoreKey(playerName, mapID, level)
+        if KeyRoll.IsDebug() then
+            KeyRoll.DebugPrint("Captured from bag:", KeyRoll.GetDungeonNameByID(mapID), "+" .. level)
+        end        KeyRoll.StoreKey(playerName, mapID, level)
         if KeyRoll.IsDebug() then
             KeyRoll.DebugPrint("Captured from bag:", KeyRoll.GetDungeonNameByID(mapID), "+" .. level)
         end
@@ -45,16 +47,32 @@ local function CaptureMyKeystone()
         -- Store in guild cache if we're in a guild
         if IsInGuild() then
             local _, class = UnitClass("player")
+            
+            -- Safely get full name with realm (can fail during combat/taint)
+            local success, fullPlayerName, realm = pcall(UnitFullName, "player")
+            if success and fullPlayerName and realm then
+                fullPlayerName = fullPlayerName .. "-" .. realm
+            else
+                -- Fallback to short name if UnitFullName fails
+                fullPlayerName = playerName
+            end
+            
             if KeyRoll.StoreGuildKey then
-                KeyRoll.StoreGuildKey(playerName, mapID, level, class)
+                KeyRoll.StoreGuildKey(fullPlayerName, mapID, level, class)
                 if KeyRoll.IsDebug() then
                     KeyRoll.DebugPrint("Stored in guild cache")
                 end
             end
             
-            -- Also broadcast to guild
+            -- Also broadcast to guild, party, and friends
             if KeyRoll.BroadcastKeystoneToGuild then
                 KeyRoll.BroadcastKeystoneToGuild()
+            end
+            if KeyRoll.IsInRealParty() and KeyRoll.BroadcastKeystoneToParty then
+                KeyRoll.BroadcastKeystoneToParty()
+            end
+            if KeyRoll.BroadcastKeystoneToFriends then
+                KeyRoll.BroadcastKeystoneToFriends()
             end
         end
         
@@ -148,6 +166,16 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
                     KeyRoll.BroadcastKeystoneToGuild()
                 end)
             end
+            if KeyRoll.BroadcastKeystoneToFriends then
+                C_Timer.After(1, function()
+                    KeyRoll.BroadcastKeystoneToFriends()
+                end)
+            end
+            if KeyRoll.IsInRealParty() and KeyRoll.BroadcastKeystoneToParty then
+                C_Timer.After(1, function()
+                    KeyRoll.BroadcastKeystoneToParty()
+                end)
+            end
             if KeyRoll.RequestGuildKeystonesFromAddon then
                 C_Timer.After(2, function()
                     KeyRoll.RequestGuildKeystonesFromAddon()
@@ -166,6 +194,16 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
                 if KeyRoll.BroadcastKeystoneToGuild then
                     C_Timer.After(1, function()
                         KeyRoll.BroadcastKeystoneToGuild()
+                    end)
+                end
+                if KeyRoll.BroadcastKeystoneToFriends then
+                    C_Timer.After(1, function()
+                        KeyRoll.BroadcastKeystoneToFriends()
+                    end)
+                end
+                if KeyRoll.IsInRealParty() and KeyRoll.BroadcastKeystoneToParty then
+                    C_Timer.After(1, function()
+                        KeyRoll.BroadcastKeystoneToParty()
                     end)
                 end
                 if KeyRoll.RequestGuildKeystonesFromAddon then
