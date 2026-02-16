@@ -78,6 +78,17 @@ end
 
 -- Check if we need to clear caches due to weekly reset
 local currentWeek = GetCurrentWeek()
+
+if KeyRoll.Debug then
+    print("[KeyRoll Debug] === Weekly Reset Check ===")
+    print("[KeyRoll Debug] Current week:", currentWeek)
+    print("[KeyRoll Debug] Last reset week:", KeyRollGlobalDB.lastResetWeek)
+    print("[KeyRoll Debug] Region:", GetCurrentRegion())
+    local serverTime = GetServerTime()
+    local dateTable = date("*t", serverTime)
+    print("[KeyRoll Debug] Server time - Day:", dateTable.wday, "Hour:", dateTable.hour)
+end
+
 if KeyRollGlobalDB.lastResetWeek < currentWeek then
     -- New week! Clear all guild caches and friend caches (keystones changed)
     local totalGuildCount = 0
@@ -110,7 +121,7 @@ if KeyRollGlobalDB.lastResetWeek < currentWeek then
     
     KeyRollGlobalDB.lastResetWeek = currentWeek
     
-    if KeyRoll and KeyRoll.Debug then
+    if KeyRoll.Debug then
         print("[KeyRoll] Weekly reset detected! Cleared caches:")
         print("  Guild keystones removed:", totalGuildCount)
         print("  Friend keystones removed:", friendCount)
