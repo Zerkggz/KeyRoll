@@ -1,24 +1,20 @@
 KeyRoll = KeyRoll or {}
 
--- Initialize account-wide saved variables
 KeyRollGlobalDB = KeyRollGlobalDB or {}
-KeyRollGlobalDB.guildCaches = KeyRollGlobalDB.guildCaches or {}  -- Per-guild caches
+KeyRollGlobalDB.guildCaches = KeyRollGlobalDB.guildCaches or {}
 KeyRollGlobalDB.friendCache = KeyRollGlobalDB.friendCache or {}
 KeyRollGlobalDB.myKeysCache = KeyRollGlobalDB.myKeysCache or {}
 KeyRollGlobalDB.partyCache = KeyRollGlobalDB.partyCache or {}
-KeyRollGlobalDB.lastResetWeek = KeyRollGlobalDB.lastResetWeek or 0
+KeyRollGlobalDB.lastResetTime = KeyRollGlobalDB.lastResetTime or 0
 
--- Initialize per-character saved variables
 KeyRollDB = KeyRollDB or {}
 KeyRollDB.cache = KeyRollDB.cache or {}
 
--- MIGRATION: Move old single guildCache to per-guild structure (BEFORE setting up pointers)
+-- Migrate old single guildCache to per-guild structure
 local currentGuild = GetGuildInfo("player")
 if KeyRollGlobalDB.guildCache and not KeyRollGlobalDB._guildCacheMigrated then
-    -- Old structure exists, migrate it
     local oldGuildName = KeyRollGlobalDB.lastGuildName or currentGuild
     if oldGuildName then
-        -- Move old cache to the old guild's cache
         KeyRollGlobalDB.guildCaches[oldGuildName] = KeyRollGlobalDB.guildCaches[oldGuildName] or {}
         local migratedCount = 0
         for k, v in pairs(KeyRollGlobalDB.guildCache) do
@@ -33,110 +29,108 @@ if KeyRollGlobalDB.guildCache and not KeyRollGlobalDB._guildCacheMigrated then
     KeyRollGlobalDB._guildCacheMigrated = true
 end
 
--- Get current guild and set up guild-specific cache
+-- Set up guild-specific cache pointer
+local noguildCache = {}  -- Local-only empty table for guildless characters (not persisted)
 if currentGuild then
-    -- Initialize this guild's cache if it doesn't exist
     KeyRollGlobalDB.guildCaches[currentGuild] = KeyRollGlobalDB.guildCaches[currentGuild] or {}
-    -- Point guildCache to the current guild's cache
     KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches[currentGuild]
 else
-    -- Not in a guild - use a special empty cache for guildless characters
-    KeyRollGlobalDB.guildCaches["_noguild_"] = {}
-    KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches["_noguild_"]
+    KeyRollGlobalDB.guildCache = noguildCache
 end
 
--- Weekly reset detection and cache clearing
--- US/Oceanic: Tuesday 15:00 UTC
--- EU: Wednesday 04:00 UTC
-local function GetCurrentWeek()
+-- Weekly reset: US/Oceanic Tue 15:00 UTC, EU Wed 04:00 UTC
+local function GetNextResetTime()
     local region = GetCurrentRegion()
-    local resetDay, resetHour
+    local serverTime = GetServerTime()
+    local d = date("*t", serverTime)
+    local resetHour, resetDay
     
     if region == 3 then  -- EU
-        resetDay = 4
-        resetHour = 4
+        resetDay = 4   -- Wednesday
+        resetHour = 4  -- 04:00 UTC
     else  -- US/Oceanic
-        resetDay = 3
-        resetHour = 15
+        resetDay = 3    -- Tuesday
+        resetHour = 15  -- 15:00 UTC
     end
     
-    local serverTime = GetServerTime()
-    local dateTable = date("*t", serverTime)
-    
-    -- Calculate weeks since epoch
-    local daysSinceEpoch = math.floor(serverTime / 86400)
-    local weeksSinceEpoch = math.floor(daysSinceEpoch / 7)
-    
-    -- Check if we've passed this week's reset
-    if dateTable.wday < resetDay or (dateTable.wday == resetDay and dateTable.hour < resetHour) then
-        -- Haven't hit reset yet this week, so we're still in last week
-        weeksSinceEpoch = weeksSinceEpoch - 1
+    local daysUntilReset
+    if d.wday > resetDay then
+        daysUntilReset = 7 - (d.wday - resetDay)
+    elseif d.wday < resetDay then
+        daysUntilReset = resetDay - d.wday
+    else
+        daysUntilReset = (d.hour < resetHour and 0 or 7)
     end
     
-    return weeksSinceEpoch
+    local nextReset = serverTime + (daysUntilReset * 86400) + ((resetHour - d.hour) * 3600) - (d.min * 60) - d.sec
+    
+    return nextReset
 end
 
--- Check if we need to clear caches due to weekly reset
-local currentWeek = GetCurrentWeek()
-
-if KeyRoll.Debug then
-    print("[KeyRoll Debug] === Weekly Reset Check ===")
-    print("[KeyRoll Debug] Current week:", currentWeek)
-    print("[KeyRoll Debug] Last reset week:", KeyRollGlobalDB.lastResetWeek)
-    print("[KeyRoll Debug] Region:", GetCurrentRegion())
+local function CheckAndClearWeeklyReset()
     local serverTime = GetServerTime()
-    local dateTable = date("*t", serverTime)
-    print("[KeyRoll Debug] Server time - Day:", dateTable.wday, "Hour:", dateTable.hour)
-end
-
-if KeyRollGlobalDB.lastResetWeek < currentWeek then
-    -- New week! Clear all guild caches and friend caches (keystones changed)
-    local totalGuildCount = 0
-    for guildName, guildCache in pairs(KeyRollGlobalDB.guildCaches) do
-        local guildCount = 0
-        for k in pairs(guildCache) do
-            guildCount = guildCount + 1
-            totalGuildCount = totalGuildCount + 1
-            guildCache[k] = nil
+    
+    if not KeyRollGlobalDB.lastResetTime or KeyRollGlobalDB.lastResetTime == 0 then
+        KeyRollGlobalDB.lastResetTime = GetNextResetTime()
+        if KeyRoll.Debug then
+            print("[KeyRoll Debug] Initialized next reset time:", date("%Y-%m-%d %H:%M:%S", KeyRollGlobalDB.lastResetTime))
         end
+        return
     end
-    
-    local friendCount = 0
-    for k in pairs(KeyRollGlobalDB.friendCache) do
-        friendCount = friendCount + 1
-        KeyRollGlobalDB.friendCache[k] = nil
-    end
-    
-    local myKeysCount = 0
-    for k in pairs(KeyRollGlobalDB.myKeysCache) do
-        myKeysCount = myKeysCount + 1
-        KeyRollGlobalDB.myKeysCache[k] = nil
-    end
-    
-    local partyCount = 0
-    for k in pairs(KeyRollGlobalDB.partyCache) do
-        partyCount = partyCount + 1
-        KeyRollGlobalDB.partyCache[k] = nil
-    end
-    
-    KeyRollGlobalDB.lastResetWeek = currentWeek
     
     if KeyRoll.Debug then
-        print("[KeyRoll] Weekly reset detected! Cleared caches:")
-        print("  Guild keystones removed:", totalGuildCount)
-        print("  Friend keystones removed:", friendCount)
-        print("  My Keys removed:", myKeysCount)
-        print("  Party keystones removed:", partyCount)
+        print("[KeyRoll Debug] === Weekly Reset Check ===")
+        print("[KeyRoll Debug] Server time:", date("%Y-%m-%d %H:%M:%S", serverTime))
+        print("[KeyRoll Debug] Next reset time:", date("%Y-%m-%d %H:%M:%S", KeyRollGlobalDB.lastResetTime))
+    end
+    
+    if serverTime >= KeyRollGlobalDB.lastResetTime then
+        local totalGuildCount = 0
+        for guildName, guildCache in pairs(KeyRollGlobalDB.guildCaches) do
+            for k in pairs(guildCache) do
+                totalGuildCount = totalGuildCount + 1
+                guildCache[k] = nil
+            end
+        end
+        
+        local friendCount = 0
+        for k in pairs(KeyRollGlobalDB.friendCache) do
+            friendCount = friendCount + 1
+            KeyRollGlobalDB.friendCache[k] = nil
+        end
+        
+        local myKeysCount = 0
+        for k in pairs(KeyRollGlobalDB.myKeysCache) do
+            myKeysCount = myKeysCount + 1
+            KeyRollGlobalDB.myKeysCache[k] = nil
+        end
+        
+        local partyCount = 0
+        for k in pairs(KeyRollGlobalDB.partyCache) do
+            partyCount = partyCount + 1
+            KeyRollGlobalDB.partyCache[k] = nil
+        end
+        
+        KeyRollGlobalDB.lastResetTime = GetNextResetTime()
+        
+        if KeyRoll.Debug then
+            print("[KeyRoll] Weekly reset detected! Cleared caches:")
+            print("  Guild keystones removed:", totalGuildCount)
+            print("  Friend keystones removed:", friendCount)
+            print("  My Keys removed:", myKeysCount)
+            print("  Party keystones removed:", partyCount)
+            print("  Next reset:", date("%Y-%m-%d %H:%M:%S", KeyRollGlobalDB.lastResetTime))
+        end
     end
 end
 
--- MIGRATION: Move old cache data (stored directly in KeyRollDB) to KeyRollDB.cache
--- This only runs once after the update
+CheckAndClearWeeklyReset()
+KeyRoll.CheckAndClearWeeklyReset = CheckAndClearWeeklyReset
+
+-- Migrate old cache data stored directly in KeyRollDB to KeyRollDB.cache
 if not KeyRollDB._migrated then
     for k, v in pairs(KeyRollDB) do
-        -- Skip known settings/metadata keys
         if k ~= "cache" and k ~= "Debug" and k ~= "_migrated" and type(v) == "table" and v.mapID then
-            -- This looks like a keystone entry, migrate it
             KeyRollDB.cache[k] = v
             KeyRollDB[k] = nil
         end
@@ -144,7 +138,6 @@ if not KeyRollDB._migrated then
     KeyRollDB._migrated = true
 end
 
--- Debug: Show what's in cache on load
 if KeyRoll and KeyRoll.Debug then
     print("[KeyRoll] Cache on load:")
     local count = 0
@@ -175,9 +168,6 @@ local storedFrame
 local KEY_REQUEST_COOLDOWN = 5
 local lastKeyRequestTime = 0
 
--------------------------------------------------
--- Debug mode
--------------------------------------------------
 local function IsDebug()
     return KeyRoll.Debug == true
 end
@@ -191,9 +181,6 @@ end
 KeyRoll.IsDebug = IsDebug
 KeyRoll.DebugPrint = DebugPrint
 
--------------------------------------------------
--- Keystone roller flavor text
--------------------------------------------------
 local ROLL_MESSAGES = {
     "Shaking the keystone bag...",
     "Consulting the ancient key spirits...",
@@ -220,9 +207,6 @@ local WIN_MESSAGES = {
     "Hope you like:",
 }
 
--------------------------------------------------
--- Get Current Party Members
--------------------------------------------------
 local function GetCurrentPartyMembers()
     local members = {}
     local playerName = Ambiguate(UnitName("player"), "short")
@@ -237,15 +221,11 @@ local function GetCurrentPartyMembers()
     return members
 end
 
--------------------------------------------------
--- Check if player is in your guild
--------------------------------------------------
 local function IsGuildMember(playerName)
     if not IsInGuild() then return false end
     
     playerName = Ambiguate(playerName, "short")
     
-    -- Check all guild members
     local numTotalMembers = GetNumGuildMembers()
     for i = 1, numTotalMembers do
         local name = GetGuildRosterInfo(i)
@@ -260,34 +240,23 @@ local function IsGuildMember(playerName)
     return false
 end
 
--------------------------------------------------
--- Actually in a party
--------------------------------------------------
 local function IsActuallyInParty()
     return IsInGroup() and GetNumSubgroupMembers() > 0
 end
 
--------------------------------------------------
--- Is the party real
--------------------------------------------------
 local function IsInRealParty()
     if not IsActuallyInParty() then return false end
     
-    -- Exclude follower dungeons (solo with NPCs)
     if C_LFGInfo and C_LFGInfo.IsInLFGFollowerDungeon and C_LFGInfo.IsInLFGFollowerDungeon() then
         return false
     end
     
-    -- Check if we're actually with real players
     local numRealPlayers = 0
-    local playerName = UnitName("player")
     
-    -- Count yourself
     if UnitIsPlayer("player") then
         numRealPlayers = numRealPlayers + 1
     end
     
-    -- Count party members that are actual players (not NPCs)
     for i = 1, GetNumSubgroupMembers() do
         local unit = "party"..i
         if UnitExists(unit) and UnitIsPlayer(unit) then
@@ -295,7 +264,6 @@ local function IsInRealParty()
         end
     end
     
-    -- Must have 2-5 real players (including yourself)
     return numRealPlayers >= 2 and numRealPlayers <= 5
 end
 
@@ -303,9 +271,6 @@ KeyRoll.IsInRealParty = IsInRealParty
 KeyRoll.IsActuallyInParty = IsActuallyInParty
 KeyRoll.GetCurrentPartyMembers = GetCurrentPartyMembers
 
--------------------------------------------------
--- Cache handling
--------------------------------------------------
 local function RefreshStoredFrame()
     if storedFrame and storedFrame:IsShown() then
         storedFrame:Refresh()
@@ -316,9 +281,6 @@ local function MarkCacheDirty(pruneNow)
     cacheNeedsPrune = true
 end
 
--------------------------------------------------
--- Store current character's keystone in My Keys cache
--------------------------------------------------
 local function StoreMyKey(mapID, level)
     if type(mapID) ~= "number" or mapID <= 0 or type(level) ~= "number" or level <= 0 then
         return
@@ -355,19 +317,17 @@ local function StoreKey(sender, mapID, level)
         return
     end
 
-    -- Store full name with realm, extract short name
     local fullName = sender
     local shortName = Ambiguate(sender, "short")
-    local realm = sender:match("%-(.+)$")  -- Extract realm if present
+    local realm = sender:match("%-(.+)$")
     
     -- If no realm in sender, try to get from party unit
     if not realm then
         for i = 1, GetNumSubgroupMembers() do
             local unit = "party"..i
             if UnitExists(unit) then
-                -- Use pcall to safely handle UnitFullName (can fail during combat/taint)
-                local success, unitName, unitRealm = pcall(UnitFullName, unit)
-                if success and unitName and Ambiguate(unitName, "short") == shortName and unitRealm then
+                local unitName, unitRealm = UnitFullName(unit)
+                if unitName and Ambiguate(unitName, "short") == shortName and unitRealm and unitRealm ~= "" then
                     realm = unitRealm
                     fullName = shortName .. "-" .. realm
                     break
@@ -378,10 +338,8 @@ local function StoreKey(sender, mapID, level)
     
     local dungeon = KeyRoll.GetDungeonNameByID(mapID) or ("Unknown (" .. tostring(mapID) .. ")")
     
-    -- Get class info for the player
     local _, class = UnitClass(sender)
     if not class then
-        -- Try to get from party
         for i = 1, GetNumSubgroupMembers() do
             local unit = "party"..i
             if UnitExists(unit) and Ambiguate(UnitName(unit), "short") == shortName then
@@ -402,13 +360,11 @@ local function StoreKey(sender, mapID, level)
         time = time(),
     }
     
-    -- If this is the player's own key, also store in My Keys cache
     local playerName = Ambiguate(UnitName("player"), "short")
     if shortName == playerName then
         StoreMyKey(mapID, level)
     end
 
-    -- If this player is also a guild member, store in guild cache too
     if IsGuildMember(shortName) then
         KeyRollGlobalDB.guildCache[shortName] = {
             name = shortName,
@@ -419,7 +375,7 @@ local function StoreKey(sender, mapID, level)
             level = level,
             dungeon = dungeon,
             time = time(),
-            source = "party", -- Mark that this came from party, not Astral Keys
+            source = "party",
         }
         if IsDebug() then
             DebugPrint("Stored guild member keystone from party:", shortName, dungeon, "+"..level)
@@ -439,25 +395,21 @@ local function StoreGuildKey(sender, mapID, level, class)
         return
     end
     
-    -- Ensure guild cache structure exists and is pointing to the right place
     KeyRollGlobalDB.guildCaches = KeyRollGlobalDB.guildCaches or {}
     local currentGuild = GetGuildInfo("player")
     if currentGuild then
         KeyRollGlobalDB.guildCaches[currentGuild] = KeyRollGlobalDB.guildCaches[currentGuild] or {}
         KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches[currentGuild]
     else
-        -- Not in a guild - don't store guild keys
         return
     end
 
-    -- Store full name with realm, extract short name
     local fullName = sender
     local shortName = Ambiguate(sender, "short")
-    local realm = sender:match("%-(.+)$")  -- Extract realm if present
+    local realm = sender:match("%-(.+)$")
     
     local dungeon = KeyRoll.GetDungeonNameByID(mapID) or ("Unknown (" .. tostring(mapID) .. ")")
     
-    -- If class not provided, try to get from guild roster
     if not class and IsInGuild() then
         local numTotalMembers = GetNumGuildMembers()
         for i = 1, numTotalMembers do
@@ -478,7 +430,7 @@ local function StoreGuildKey(sender, mapID, level, class)
         level = level,
         dungeon = dungeon,
         time = time(),
-        source = "astralkeys", -- Mark that this came from Astral Keys
+        source = "astralkeys",
     }
     
     -- Check if this person is a Battle.net friend and add to friend cache
@@ -495,7 +447,6 @@ local function StoreGuildKey(sender, mapID, level, class)
         end
     end
     
-    -- Update friend cache if this person is a Battle.net friend
     if isBNetFriend then
         KeyRollGlobalDB.friendCache[shortName] = {
             name = shortName,
@@ -506,7 +457,7 @@ local function StoreGuildKey(sender, mapID, level, class)
             level = level,
             dungeon = dungeon,
             time = time(),
-            source = "guild", -- Updated from guild broadcast
+            source = "guild",
         }
     end
 
@@ -516,25 +467,18 @@ end
 KeyRoll.StoreKey = StoreKey
 KeyRoll.StoreGuildKey = StoreGuildKey
 
--------------------------------------------------
--- Format character name with realm if cross-realm
--------------------------------------------------
 local function FormatCharacterName(nameOrData)
-    -- Get current player's realm
     local _, currentRealm = UnitFullName("player")
     
     local name, realm
     
-    -- Check if input is a table (keystone data object)
     if type(nameOrData) == "table" then
         name = nameOrData.name
         realm = nameOrData.realm
-        -- If realm field exists and is populated, use it
         if not realm and nameOrData.fullName then
             realm = nameOrData.fullName:match("%-(.+)$")
         end
     else
-        -- Input is a string - parse it
         local fullName = nameOrData
         name, realm = fullName:match("^([^%-]+)%-(.+)$")
         if not name then
@@ -543,7 +487,6 @@ local function FormatCharacterName(nameOrData)
         end
     end
     
-    -- If realm exists and is different from current player's realm, show it
     if realm and realm ~= currentRealm then
         return string.format("%s |cff888888(%s)|r", name, realm)
     else
@@ -553,24 +496,17 @@ end
 
 KeyRoll.FormatCharacterName = FormatCharacterName
 
--------------------------------------------------
--- Check if a character is online
--------------------------------------------------
 local function IsCharacterOnline(charName, tabType)
     local shortName = Ambiguate(charName, "short")
     
-    -- For My Keys tab - check if any of your characters are online
     if tabType == "mykeys" then
-        -- Your current character is always online
         local playerName = Ambiguate(UnitName("player"), "short")
         if shortName == playerName then
             return true
         end
-        -- Other characters are offline (can't tell if they're online on another account)
         return false
     end
     
-    -- For Party tab - check party members
     if tabType == "party" then
         if UnitExists("player") and Ambiguate(UnitName("player"), "short") == shortName then
             return true
@@ -584,53 +520,46 @@ local function IsCharacterOnline(charName, tabType)
         return false
     end
     
-    -- For Guild tab - check guild roster (wrapped in pcall for combat safety)
     if tabType == "guild" and IsInGuild() then
-        -- Current player is always online
         local playerName = Ambiguate(UnitName("player"), "short")
         if shortName == playerName then
             return true
         end
         
-        -- First check if they're an online Battle.net friend (more reliable)
-        local success, _, numBNetOnline = pcall(BNGetNumFriends)
-        if success and numBNetOnline then
+        -- Battle.net friend status is more reliable than guild roster for online checks
+        local _, numBNetOnline = BNGetNumFriends()
+        if numBNetOnline then
             for i = 1, numBNetOnline do
-                local success2, accountInfo = pcall(C_BattleNet.GetFriendAccountInfo, i)
-                if success2 and accountInfo and accountInfo.gameAccountInfo and accountInfo.gameAccountInfo.isOnline then
+                local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
+                if accountInfo and accountInfo.gameAccountInfo and accountInfo.gameAccountInfo.isOnline then
                     local characterName = accountInfo.gameAccountInfo.characterName
                     if characterName and Ambiguate(characterName, "short") == shortName then
-                        return true  -- Friend is online
+                        return true
                     end
                 end
             end
         end
         
-        -- Fall back to guild roster check
-        local success, numTotal = pcall(GetNumGuildMembers)
-        if not success then
-            return true  -- Default to online if check fails
-        end
-        
+        -- Fall back to guild roster
+        local numTotal = GetNumGuildMembers()
         for i = 1, numTotal do
-            local success2, name, _, _, _, _, _, _, online = pcall(GetGuildRosterInfo, i)
-            if success2 and name and Ambiguate(name, "short") == shortName then
+            local name, _, _, _, _, _, _, online = GetGuildRosterInfo(i)
+            if name and Ambiguate(name, "short") == shortName then
                 return online == true
             end
         end
         return false
     end
     
-    -- For Friends tab - check Battle.net friends (wrapped in pcall for combat safety)
     if tabType == "friends" then
-        local success, _, numBNetOnline = pcall(BNGetNumFriends)
-        if not success then
-            return true  -- Default to online if check fails
+        local _, numBNetOnline = BNGetNumFriends()
+        if not numBNetOnline then
+            return true
         end
         
         for i = 1, numBNetOnline do
-            local success2, accountInfo = pcall(C_BattleNet.GetFriendAccountInfo, i)
-            if success2 and accountInfo and accountInfo.gameAccountInfo and accountInfo.gameAccountInfo.isOnline then
+            local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
+            if accountInfo and accountInfo.gameAccountInfo and accountInfo.gameAccountInfo.isOnline then
                 local characterName = accountInfo.gameAccountInfo.characterName
                 if characterName then
                     local friendShortName = Ambiguate(characterName, "short")
@@ -643,14 +572,11 @@ local function IsCharacterOnline(charName, tabType)
         return false
     end
     
-    return true -- Default to online if we can't determine
+    return true
 end
 
 KeyRoll.IsCharacterOnline = IsCharacterOnline
 
--------------------------------------------------
--- Cache pruning (explicit)
--------------------------------------------------
 local function PruneCache()
     local members = GetCurrentPartyMembers()
     
@@ -668,7 +594,7 @@ local function PruneCache()
         DebugPrint("  -", name, "debug="..tostring(key.debug))
     end
     
-    -- Don't prune if lastPartyMembers is empty (just reloaded, don't know who left vs who was always there)
+    -- Don't prune if we have no previous party data (just reloaded)
     local hadPreviousMembers = false
     for _ in pairs(lastPartyMembers) do
         hadPreviousMembers = true
@@ -683,7 +609,7 @@ local function PruneCache()
         return
     end
     
-    -- Normal pruning: remove keys for people who WERE in party but now aren't
+    -- Remove keys for people who were in party but now aren't
     local prunedAny = false
     for name, key in pairs(cache) do
         if not key.debug and lastPartyMembers[name] and not members[name] then
@@ -695,7 +621,6 @@ local function PruneCache()
     lastPartyMembers = members
     cacheNeedsPrune = false
     
-    -- Refresh UI if we pruned anything
     if prunedAny then
         RefreshStoredFrame()
     end
@@ -703,9 +628,6 @@ local function PruneCache()
     DebugPrint("=== PruneCache done ===")
 end
 
--------------------------------------------------
--- Get rollable keys (read-only!)
--------------------------------------------------
 local function GetRollableKeys()
     local keys = {}
     local playerName = Ambiguate(UnitName("player"), "short")
@@ -719,9 +641,6 @@ local function GetRollableKeys()
     return keys
 end
 
--------------------------------------------------
--- Debug solo keys
--------------------------------------------------
 local function DebugSeed()
     cache["TestPlayer1"] = { name="TestPlayer1", mapID=503, level=12, time=time(), debug=true }
     cache["TestPlayer2"] = { name="TestPlayer2", mapID=505, level=15, time=time(), debug=true }
@@ -733,9 +652,6 @@ local function DebugClear()
     end
 end
 
--------------------------------------------------
--- Stored frame with tabs
--------------------------------------------------
 local function CreateStoredFrame()
     if storedFrame then return end
 
@@ -750,39 +666,32 @@ local function CreateStoredFrame()
     storedFrame:SetScript("OnDragStart", storedFrame.StartMoving)
     storedFrame:SetScript("OnDragStop", storedFrame.StopMovingOrSizing)
 
-    -- Title
     storedFrame.TitleText:SetText("|cff00ff00KeyRoll|r |cffffffffKeystones|r")
     storedFrame.TitleText:SetFont("Fonts\\FRIZQT__.TTF", 14, "OUTLINE")
 
-    -- Refresh button
     local refreshButton = CreateFrame("Button", nil, storedFrame)
     refreshButton:SetSize(24, 24)
     refreshButton:SetPoint("TOPRIGHT", storedFrame.CloseButton, "TOPLEFT", -2, 0)
     
-    -- Custom texture for refresh icon (using built-in WoW textures)
     refreshButton:SetNormalTexture("Interface\\Buttons\\UI-RefreshButton")
     refreshButton:SetHighlightTexture("Interface\\Buttons\\UI-Common-MouseHilight", "ADD")
     refreshButton:SetPushedTexture("Interface\\Buttons\\UI-RefreshButton")
     
-    -- Make the pushed texture darker/offset for click feedback
     local pushedTex = refreshButton:GetPushedTexture()
     if pushedTex then
-        pushedTex:SetVertexColor(0.5, 0.5, 0.5)  -- Darker when pushed
+        pushedTex:SetVertexColor(0.5, 0.5, 0.5)
     end
     
-    -- Enable button to actually depress when clicked
     refreshButton:SetButtonState("NORMAL")
     refreshButton:RegisterForClicks("LeftButtonUp")
     
     refreshButton:SetScript("OnClick", function(self)
         storedFrame:Refresh()
-        -- Visual feedback
         if KeyRoll.IsDebug() then
             KeyRoll.DebugPrint("Manual refresh triggered")
         end
     end)
     
-    -- Tooltip
     refreshButton:SetScript("OnEnter", function(self)
         GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
         GameTooltip:SetText("Refresh Keystones", 1, 1, 1)
@@ -793,15 +702,14 @@ local function CreateStoredFrame()
         GameTooltip:Hide()
     end)
 
-    -- Tab system with cleaner styling
-    storedFrame.activeTab = "mykeys"  -- Default to My Keys tab
+    storedFrame.activeTab = "mykeys"
     storedFrame.tabs = {}
 
     local tabData = {
-        {id="mykeys", label="My Keys", color={0.8, 0.2, 0.8}, x=10},      -- Purple
-        {id="party", label="Party", color={0.2, 0.5, 0.9}, x=110},        -- Blue
-        {id="friends", label="Friends", color={0.9, 0.6, 0.2}, x=210},    -- Orange
-        {id="guild", label="Guild", color={0.2, 0.8, 0.2}, x=310}         -- Green
+        {id="mykeys", label="My Keys", color={0.8, 0.2, 0.8}, x=10},
+        {id="party", label="Party", color={0.2, 0.5, 0.9}, x=110},
+        {id="friends", label="Friends", color={0.9, 0.6, 0.2}, x=210},
+        {id="guild", label="Guild", color={0.2, 0.8, 0.2}, x=310}
     }
 
     for _, data in ipairs(tabData) do
@@ -809,7 +717,6 @@ local function CreateStoredFrame()
         tab:SetSize(95, 26)
         tab:SetPoint("TOPLEFT", data.x, -35)
         
-        -- Simple backdrop
         tab:SetBackdrop({
             bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
             edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -820,23 +727,19 @@ local function CreateStoredFrame()
         tab:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
         tab:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
         
-        -- Tab text
         tab.text = tab:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         tab.text:SetPoint("CENTER", 0, 0)
         tab.text:SetText(data.label)
         tab.text:SetFont("Fonts\\FRIZQT__.TTF", 12, "OUTLINE")
         tab.text:SetTextColor(0.7, 0.7, 0.7)
         
-        -- Store color for active state
         tab.activeColor = data.color
         
-        -- Tab click handler
         tab:SetScript("OnClick", function()
             storedFrame.activeTab = data.id
             storedFrame:Refresh()
         end)
         
-        -- Tab hover effects
         tab:SetScript("OnEnter", function()
             if storedFrame.activeTab ~= data.id then
                 tab:SetBackdropColor(0.2, 0.2, 0.2, 0.9)
@@ -853,10 +756,9 @@ local function CreateStoredFrame()
         storedFrame.tabs[data.id] = tab
     end
 
-    -- Key Roller tab - Purple/Gold color
     local rollerTab = CreateFrame("Button", nil, storedFrame, "BackdropTemplate")
     rollerTab:SetSize(95, 26)
-    rollerTab:SetPoint("TOPRIGHT", -10, -35)  -- Right side
+    rollerTab:SetPoint("TOPRIGHT", -10, -35)
     
     rollerTab:SetBackdrop({
         bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
@@ -874,7 +776,7 @@ local function CreateStoredFrame()
     rollerTab.text:SetFont("Fonts\\FRIZQT__.TTF", 12, "OUTLINE")
     rollerTab.text:SetTextColor(0.7, 0.7, 0.7)
     
-    rollerTab.activeColor = {1.0, 0.8, 0.0}  -- Gold color
+    rollerTab.activeColor = {1.0, 0.8, 0.0}
     
     rollerTab:SetScript("OnClick", function()
         storedFrame.activeTab = "roller"
@@ -896,10 +798,8 @@ local function CreateStoredFrame()
     
     storedFrame.tabs["roller"] = rollerTab
 
-    -- Sort controls - all elements as FontStrings for baseline alignment
     local sortY = -70
     
-    -- "Sort by:" label
     storedFrame.sortLabel = storedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     storedFrame.sortLabel:SetPoint("TOPLEFT", 15, sortY)
     storedFrame.sortLabel:SetText("Sort by:")
@@ -908,7 +808,6 @@ local function CreateStoredFrame()
     storedFrame.sortMode = "level"
     storedFrame.sortButtons = {}
     
-    -- Level button (clickable FontString)
     local levelBtn = CreateFrame("Button", nil, storedFrame)
     levelBtn:SetSize(32, 14)
     levelBtn:SetPoint("TOPLEFT", 64, sortY)
@@ -923,17 +822,14 @@ local function CreateStoredFrame()
     levelBtn:SetScript("OnLeave", function() if storedFrame.sortMode ~= "level" then levelBtn.text:SetTextColor(0.6, 0.6, 0.6) end end)
     storedFrame.sortButtons["level"] = levelBtn
     
-    -- Create sortPipes table
     storedFrame.sortPipes = {}
     
-    -- First pipe
     local pipe1 = storedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     pipe1:SetPoint("TOPLEFT", 102, sortY)
     pipe1:SetText("|")
     pipe1:SetTextColor(0.4, 0.4, 0.4)
     table.insert(storedFrame.sortPipes, pipe1)
     
-    -- Character button
     local nameBtn = CreateFrame("Button", nil, storedFrame)
     nameBtn:SetSize(60, 14)
     nameBtn:SetPoint("TOPLEFT", 114, sortY)
@@ -948,17 +844,15 @@ local function CreateStoredFrame()
     nameBtn:SetScript("OnLeave", function() if storedFrame.sortMode ~= "name" then nameBtn.text:SetTextColor(0.6, 0.6, 0.6) end end)
     storedFrame.sortButtons["name"] = nameBtn
     
-    -- Second pipe
     local pipe2 = storedFrame:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     pipe2:SetPoint("TOPLEFT", 178, sortY)
     pipe2:SetText("|")
     pipe2:SetTextColor(0.4, 0.4, 0.4)
     table.insert(storedFrame.sortPipes, pipe2)
     
-    -- Dungeon button
     local dungeonBtn = CreateFrame("Button", nil, storedFrame)
     dungeonBtn:SetSize(50, 14)
-    dungeonBtn:SetPoint("TOPLEFT", 190, sortY)  -- Adjusted for new pipe2 position
+    dungeonBtn:SetPoint("TOPLEFT", 190, sortY)
     dungeonBtn.text = dungeonBtn:CreateFontString(nil, "OVERLAY", "GameFontNormalSmall")
     dungeonBtn.text:SetAllPoints()
     dungeonBtn.text:SetJustifyH("CENTER")
@@ -970,7 +864,6 @@ local function CreateStoredFrame()
     dungeonBtn:SetScript("OnLeave", function() if storedFrame.sortMode ~= "dungeon" then dungeonBtn.text:SetTextColor(0.6, 0.6, 0.6) end end)
     storedFrame.sortButtons["dungeon"] = dungeonBtn
 
-    -- Content area background
     storedFrame.contentBg = CreateFrame("Frame", nil, storedFrame, "BackdropTemplate")
     storedFrame.contentBg:SetPoint("TOPLEFT", 15, -88)
     storedFrame.contentBg:SetPoint("BOTTOMRIGHT", -15, 15)
@@ -983,7 +876,6 @@ local function CreateStoredFrame()
     storedFrame.contentBg:SetBackdropColor(0.05, 0.05, 0.05, 0.8)
     storedFrame.contentBg:SetBackdropBorderColor(0.2, 0.2, 0.2, 1)
 
-    -- Scroll frame
     storedFrame.scrollFrame = CreateFrame("ScrollFrame", nil, storedFrame, "UIPanelScrollFrameTemplate")
     storedFrame.scrollFrame:SetPoint("TOPLEFT", storedFrame.contentBg, "TOPLEFT", 8, -8)
     storedFrame.scrollFrame:SetPoint("BOTTOMRIGHT", storedFrame.contentBg, "BOTTOMRIGHT", -25, 8)
@@ -991,19 +883,16 @@ local function CreateStoredFrame()
     storedFrame.content = CreateFrame("Frame", nil, storedFrame.scrollFrame)
     storedFrame.scrollFrame:SetScrollChild(storedFrame.content)
 
-    -- Styled rows with unlimited capacity (dynamically created)
     storedFrame.rows = {}
     storedFrame.rowHeight = 24
     storedFrame.rowGap = 2
     storedFrame.rowWidth = 450
 
-    -- Function to create a row on demand
     function storedFrame:CreateRow(index)
         local row = CreateFrame("Frame", nil, self.content, "BackdropTemplate")
         row:SetSize(self.rowWidth, self.rowHeight)
         row:SetPoint("TOPLEFT", 0, -(index-1) * (self.rowHeight + self.rowGap))
         
-        -- All rows get a background for better separation
         row:SetBackdrop({
             bgFile = "Interface\\ChatFrame\\ChatFrameBackground",
             edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
@@ -1012,7 +901,6 @@ local function CreateStoredFrame()
             insets = { left = 1, right = 1, top = 1, bottom = 1 }
         })
         
-        -- Alternating colors for better visual separation
         if index % 2 == 0 then
             row:SetBackdropColor(0.08, 0.08, 0.08, 0.9)
         else
@@ -1020,7 +908,6 @@ local function CreateStoredFrame()
         end
         row:SetBackdropBorderColor(0.2, 0.2, 0.2, 0.5)
         
-        -- Row text with better font
         row.text = row:CreateFontString(nil, "OVERLAY", "GameFontNormal")
         row.text:SetPoint("LEFT", 8, 0)
         row.text:SetSize(self.rowWidth - 16, self.rowHeight)
@@ -1031,18 +918,14 @@ local function CreateStoredFrame()
         return row
     end
 
-    -- Refresh function
     function storedFrame:Refresh()
-        -- Ensure guild cache structure exists
         KeyRollGlobalDB.guildCaches = KeyRollGlobalDB.guildCaches or {}
         
-        -- Ensure guild cache pointer is set up correctly
         local currentGuild = GetGuildInfo("player")
         if currentGuild then
             KeyRollGlobalDB.guildCaches[currentGuild] = KeyRollGlobalDB.guildCaches[currentGuild] or {}
             KeyRollGlobalDB.guildCache = KeyRollGlobalDB.guildCaches[currentGuild]
         else
-            -- Always use empty cache for guildless characters (don't persist)
             KeyRollGlobalDB.guildCache = {}
         end
         
@@ -1051,33 +934,27 @@ local function CreateStoredFrame()
             DebugPrint("Current activeTab:", self.activeTab or "nil")
         end
         
-        -- Update tab appearances
         for id, tab in pairs(self.tabs) do
             if id == self.activeTab then
-                -- Active tab: colored background and border
                 tab:SetBackdropColor(tab.activeColor[1] * 0.3, tab.activeColor[2] * 0.3, tab.activeColor[3] * 0.3, 0.9)
                 tab:SetBackdropBorderColor(tab.activeColor[1], tab.activeColor[2], tab.activeColor[3], 1)
                 tab.text:SetTextColor(1, 1, 1)
             else
-                -- Inactive tab: dark background
                 tab:SetBackdropColor(0.1, 0.1, 0.1, 0.9)
                 tab:SetBackdropBorderColor(0.3, 0.3, 0.3, 1)
                 tab.text:SetTextColor(0.7, 0.7, 0.7)
             end
         end
         
-        -- Update sort button appearances
         for id, btn in pairs(self.sortButtons) do
             if id == self.sortMode then
-                btn.text:SetTextColor(0.2, 1, 0.2)  -- Bright green for active
+                btn.text:SetTextColor(0.2, 1, 0.2)
             else
-                btn.text:SetTextColor(0.6, 0.6, 0.6)  -- Gray for inactive
+                btn.text:SetTextColor(0.6, 0.6, 0.6)
             end
         end
         
-        -- Show/hide sort controls based on active tab
         if self.activeTab == "roller" then
-            -- Hide sort controls on Key Roller tab only
             if self.sortLabel then self.sortLabel:Hide() end
             for _, btn in pairs(self.sortButtons) do
                 if btn then btn:Hide() end
@@ -1088,7 +965,6 @@ local function CreateStoredFrame()
                 end
             end
         else
-            -- Show sort controls on all other tabs (My Keys, Party, Friends, Guild)
             if self.sortLabel then self.sortLabel:Show() end
             for _, btn in pairs(self.sortButtons) do
                 if btn then btn:Show() end
@@ -1100,10 +976,8 @@ local function CreateStoredFrame()
             end
         end
         
-        -- Hide all rows
         for _, row in ipairs(self.rows) do row:Hide() end
         
-        -- Get appropriate data based on active tab
         local keys = {}
         if self.activeTab == "mykeys" then
             if IsDebug() then
@@ -1130,7 +1004,6 @@ local function CreateStoredFrame()
                     DebugPrint("Not in a guild")
                 end
                 
-                -- Show which guild caches exist
                 if KeyRollGlobalDB.guildCaches then
                     DebugPrint("Available guild caches:")
                     for gName, gCache in pairs(KeyRollGlobalDB.guildCaches) do
@@ -1142,7 +1015,6 @@ local function CreateStoredFrame()
                     DebugPrint("WARNING: KeyRollGlobalDB.guildCaches is nil!")
                 end
                 
-                -- Show what we're about to display
                 if KeyRollGlobalDB.guildCache then
                     local currentCacheCount = 0
                     for _ in pairs(KeyRollGlobalDB.guildCache) do currentCacheCount = currentCacheCount + 1 end
@@ -1180,15 +1052,12 @@ local function CreateStoredFrame()
                     end
                 end
             end
-            -- Use global directly instead of local variable
             for _, key in pairs(KeyRollGlobalDB.friendCache) do
                 table.insert(keys, key)
             end
         elseif self.activeTab == "roller" then
-            -- Key Roller tab - show roll button and last result
             self.content:SetSize(self.rowWidth, 200)
             
-            -- Create roll button if it doesn't exist
             if not self.rollButton then
                 self.rollButton = CreateFrame("Button", nil, self.content, "BackdropTemplate")
                 self.rollButton:SetSize(200, 50)
@@ -1201,23 +1070,20 @@ local function CreateStoredFrame()
                     edgeSize = 16,
                     insets = { left = 4, right = 4, top = 4, bottom = 4 }
                 })
-                self.rollButton:SetBackdropColor(0.8, 0.6, 0.0, 0.9)  -- Gold
+                self.rollButton:SetBackdropColor(0.8, 0.6, 0.0, 0.9)
                 self.rollButton:SetBackdropBorderColor(1.0, 0.8, 0.0, 1)
                 
-                -- Button text
                 self.rollButton.text = self.rollButton:CreateFontString(nil, "OVERLAY", "GameFontNormalLarge")
                 self.rollButton.text:SetPoint("CENTER")
                 self.rollButton.text:SetText("Roll Keys")
                 self.rollButton.text:SetFont("Fonts\\FRIZQT__.TTF", 16, "OUTLINE")
                 
-                -- Click handler
                 self.rollButton:SetScript("OnClick", function()
                     if not KeyRoll.IsInRealParty() and not KeyRoll.IsDebug() then
                         KeyRoll.SendMessage("KeyRoll commands are disabled outside a real party.", {localOnly=true})
                         return
                     end
                     
-                    -- Execute roll
                     KeyRoll.PruneCache()
                     local rollKeys = GetRollableKeys()
                     
@@ -1227,12 +1093,10 @@ local function CreateStoredFrame()
                         return
                     end
                     
-                    -- Show flavor text
                     local rollMsg = ROLL_MESSAGES[math.random(#ROLL_MESSAGES)]
                     KeyRoll.SendMessage(rollMsg)
                     self.rollResult:SetText("|cffaaaaaa" .. rollMsg .. "|r")
                     
-                    -- Delayed result
                     C_Timer.After(1.5, function()
                         local keysNow = GetRollableKeys()
                         if #keysNow == 0 then
@@ -1247,7 +1111,6 @@ local function CreateStoredFrame()
                         
                         KeyRoll.SendMessage(string.format("%s %s - %s +%d", winMsg, chosen.name, dungeonName, chosen.level))
                         
-                        -- Update UI result with class color
                         local nameColor = "|cffffffff"
                         if chosen.class then
                             local classColor = C_ClassColor.GetClassColor(chosen.class)
@@ -1279,7 +1142,6 @@ local function CreateStoredFrame()
                     end)
                 end)
                 
-                -- Hover effects
                 self.rollButton:SetScript("OnEnter", function()
                     self.rollButton:SetBackdropColor(1.0, 0.7, 0.0, 1.0)
                 end)
@@ -1287,7 +1149,6 @@ local function CreateStoredFrame()
                     self.rollButton:SetBackdropColor(0.8, 0.6, 0.0, 0.9)
                 end)
                 
-                -- Result text below button
                 self.rollResult = self.content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
                 self.rollResult:SetPoint("TOP", 0, -90)
                 self.rollResult:SetSize(self.rowWidth - 40, 100)
@@ -1300,25 +1161,18 @@ local function CreateStoredFrame()
             self.rollButton:Show()
             self.rollResult:Show()
             
-            -- Hide empty message when on Key Roller tab
             if self.emptyMessage then
                 self.emptyMessage:Hide()
             end
             
-            return  -- Skip normal key display
+            return
         end
         
-        -- Hide roll button and result when not on Key Roller tab
+        -- Hide roll button/result when not on roller tab
         if self.rollButton then
             self.rollButton:Hide()
         end
         if self.rollResult then
-            self.rollResult:Hide()
-        end
-        
-        -- Hide roller button/result when not on roller tab
-        if self.rollButton then
-            self.rollButton:Hide()
             self.rollResult:Hide()
         end
         
@@ -1331,41 +1185,37 @@ local function CreateStoredFrame()
             end
         end
         
-        -- Sort based on selected mode
         if self.sortMode == "level" then
             table.sort(keys, function(a,b)
                 if a.level ~= b.level then
-                    return a.level > b.level  -- Highest first
+                    return a.level > b.level
                 end
                 return a.name < b.name
             end)
         elseif self.sortMode == "name" then
             table.sort(keys, function(a,b)
-                return a.name < b.name  -- Alphabetical
+                return a.name < b.name
             end)
         elseif self.sortMode == "dungeon" then
             table.sort(keys, function(a,b)
                 local dungeonA = a.dungeon or KeyRoll.GetDungeonNameByID(a.mapID) or ""
                 local dungeonB = b.dungeon or KeyRoll.GetDungeonNameByID(b.mapID) or ""
                 if dungeonA ~= dungeonB then
-                    return dungeonA < dungeonB  -- Alphabetical
+                    return dungeonA < dungeonB
                 end
-                return a.level > b.level  -- Then by level
+                return a.level > b.level
             end)
         end
         
         local totalHeight = #keys * (self.rowHeight + self.rowGap)
         
-        -- Ensure minimum height when showing empty message
         if #keys == 0 then
-            totalHeight = 200  -- Minimum height for empty message
+            totalHeight = 200
         end
         
         self.content:SetSize(self.rowWidth, totalHeight)
 
-        -- Display keys with color coding - create rows as needed
         for index, data in ipairs(keys) do
-            -- Create row if it doesn't exist
             if not self.rows[index] then
                 self:CreateRow(index)
             end
@@ -1375,19 +1225,17 @@ local function CreateStoredFrame()
                 local text
                 local levelColor
                 
-                -- Color code by key level
                 if data.level >= 20 then
-                    levelColor = "|cffff00ff" -- Purple for 20+
+                    levelColor = "|cffff00ff"
                 elseif data.level >= 15 then
-                    levelColor = "|cffff8000" -- Orange for 15-19
+                    levelColor = "|cffff8000"
                 elseif data.level >= 10 then
-                    levelColor = "|cff0070dd" -- Blue for 10-14
+                    levelColor = "|cff0070dd"
                 else
-                    levelColor = "|cff1eff00" -- Green for <10
+                    levelColor = "|cff1eff00"
                 end
                 
-                -- Get class color for player name
-                local nameColor = "|cffffffff" -- Default white
+                local nameColor = "|cffffffff"
                 if data.class then
                     local classColor = C_ClassColor.GetClassColor(data.class)
                     if classColor then
@@ -1395,10 +1243,8 @@ local function CreateStoredFrame()
                     end
                 end
                 
-                -- Format name with realm if cross-realm
                 local displayName = KeyRoll.FormatCharacterName(data)
                 
-                -- Format with class-colored name
                 text = string.format(
                     "%s%s|r - %s %s+%d|r",
                     nameColor,
@@ -1409,26 +1255,23 @@ local function CreateStoredFrame()
                 )
                 row.text:SetText(text)
                 
-                -- Check if character is online and adjust alpha
                 local isOnline = KeyRoll.IsCharacterOnline(data.name, self.activeTab)
                 if isOnline then
-                    row:SetAlpha(1.0)  -- Full opacity for online
+                    row:SetAlpha(1.0)
                 else
-                    row:SetAlpha(0.4)  -- 40% opacity for offline
+                    row:SetAlpha(0.4)
                 end
                 
                 row:Show()
             end
         end
         
-        -- Hide unused rows
         for i = #keys + 1, #self.rows do
             if self.rows[i] then
                 self.rows[i]:Hide()
             end
         end
         
-        -- Hide/show empty message
         if not self.emptyMessage then
             self.emptyMessage = self.content:CreateFontString(nil, "OVERLAY", "GameFontNormal")
             self.emptyMessage:SetPoint("TOP", 0, -50)
@@ -1438,7 +1281,6 @@ local function CreateStoredFrame()
             self.emptyMessage:SetFont("Fonts\\FRIZQT__.TTF", 14)
         end
         
-        -- Show "No keys" message if empty
         if #keys == 0 then
             local msg
             if self.activeTab == "party" then
@@ -1461,69 +1303,52 @@ local function CreateStoredFrame()
     end
 end
 
--------------------------------------------------
--- Safe send
--------------------------------------------------
 local function SendMessage(text, opts)
     opts = opts or {}
     local localOnly = opts.localOnly or false
 
-    -- Always print locally if forced, not in a real party, or debug mode
     if localOnly or not IsInRealParty() or KeyRoll.Debug then
         print(KeyRoll.PREFIX, text)
     else
-        -- Only send to party if in a real party and not forced local
         SendChatMessage(text, "PARTY")
     end
 end
 
--------------------------------------------------
--- Slash commands
--------------------------------------------------
 SLASH_KEYROLL1 = "/keyroll"
 SLASH_KEYROLL2 = "/kr"
 SlashCmdList["KEYROLL"] = function(msg)
     msg = (msg or ""):lower()
 
-    -- Default: Open stored frame (when no arguments)
     if msg == "" then
         if not KeyRoll.StoredFrame then KeyRoll.CreateStoredFrame() end
+        KeyRoll.CheckAndClearWeeklyReset()
         KeyRoll.StoredFrame:Show()
         KeyRoll.StoredFrame:Refresh()
         return
     end
 
-    -- Roll subcommand
     if msg == "roll" then
-        -- Handle roll at the end of this function
-        msg = "roll"  -- Mark for processing below
+        -- Handled at the end of this function
     
-    -- List subcommand
     elseif msg == "list" then
-        -- Handle list later in the function
-        msg = "list"  -- Mark for processing below
+        -- Handled at the end of this function
     
-    -- Capture subcommand
     elseif msg == "capture" then
         KeyRoll.ManualCapture()
         return
     
-    -- Clear subcommand
     elseif msg == "clear" then
-        -- Fully wipe the party cache only (not guild or friend caches)
         for name in pairs(cache) do
             cache[name] = nil
         end
         KeyRoll.SendMessage("Party cache cleared. All party keystones removed.", {localOnly=true})
         KeyRoll.SendMessage("(Guild and Friend keystones are not affected)", {localOnly=true})
         
-        -- Refresh stored frame if shown
         if KeyRoll.StoredFrame and KeyRoll.StoredFrame:IsShown() then
             KeyRoll.StoredFrame:Refresh()
         end
         return
     
-    -- Help subcommand
     elseif msg == "help" then
         KeyRoll.SendMessage("|cff00ff00=== KeyRoll Commands ===|r", {localOnly=true})
         KeyRoll.SendMessage(" ", {localOnly=true})
@@ -1547,43 +1372,35 @@ SlashCmdList["KEYROLL"] = function(msg)
         KeyRoll.SendMessage("|cffaaaaaa(Party = current group, Guild = all guild members, Friends = Battle.net friends)|r", {localOnly=true})
         return
 
-    -- Debug commands
     elseif msg:find("^debug") then
 		local arg = msg:match("^debug%s*(%S*)") or ""
 
 		if arg == "" then
-			-- Toggle debug mode (does not persist)
 			KeyRoll.Debug = not KeyRoll.Debug
 			local state = KeyRoll.Debug and "enabled" or "disabled"
 			KeyRoll.SendMessage("Debug mode " .. state .. ".", {localOnly=true})
 
-			-- Clear debug keys if turning off
 			if not KeyRoll.Debug then
 				KeyRoll.DebugClear()
 			end
 
 		elseif arg == "seed" then
-			-- Seed debug keys
 			KeyRoll.DebugSeed()
 			KeyRoll.SendMessage("Debug keys added.", {localOnly=true})
 
-			-- Refresh stored frame if shown
 			if KeyRoll.StoredFrame and KeyRoll.StoredFrame:IsShown() then
 				KeyRoll.StoredFrame:Refresh()
 			end
 
 		elseif arg == "clear" then
-			-- Clear debug keys
 			KeyRoll.DebugClear()
 			KeyRoll.SendMessage("Debug keys cleared.", {localOnly=true})
 
-			-- Refresh stored frame if shown
 			if KeyRoll.StoredFrame and KeyRoll.StoredFrame:IsShown() then
 				KeyRoll.StoredFrame:Refresh()
 			end
 
 		elseif arg == "cache" then
-			-- Dump raw cache for debugging
 			KeyRoll.SendMessage("=== RAW CACHE DUMP ===", {localOnly=true})
 			local count = 0
 			for name, key in pairs(cache) do
@@ -1600,7 +1417,6 @@ SlashCmdList["KEYROLL"] = function(msg)
 			KeyRoll.SendMessage("===================", {localOnly=true})
 
 		elseif arg == "db" then
-			-- Dump entire KeyRollDB for debugging
 			KeyRoll.SendMessage("=== KeyRollDB DUMP ===", {localOnly=true})
 			KeyRoll.SendMessage("KeyRollDB.Debug = " .. tostring(KeyRollDB.Debug), {localOnly=true})
 			KeyRoll.SendMessage("KeyRollDB._migrated = " .. tostring(KeyRollDB._migrated), {localOnly=true})
@@ -1616,7 +1432,6 @@ SlashCmdList["KEYROLL"] = function(msg)
 			KeyRoll.SendMessage("===================", {localOnly=true})
 
 		elseif arg == "guild" then
-			-- Show guild cache stats
 			KeyRoll.SendMessage("=== GUILD CACHE ===", {localOnly=true})
 			local akCount = 0
 			local partyCount = 0
@@ -1646,7 +1461,6 @@ SlashCmdList["KEYROLL"] = function(msg)
 			KeyRoll.SendMessage("===================", {localOnly=true})
 		
 		elseif arg == "friends" then
-			-- Show friend cache stats
 			KeyRoll.SendMessage("=== FRIEND CACHE ===", {localOnly=true})
 			local total = 0
 			for name, key in pairs(KeyRollGlobalDB.friendCache) do
@@ -1669,7 +1483,6 @@ SlashCmdList["KEYROLL"] = function(msg)
 			KeyRoll.SendMessage("===================", {localOnly=true})
 		
 		elseif arg == "globaldb" then
-			-- Show raw KeyRollGlobalDB
 			KeyRoll.SendMessage("=== KeyRollGlobalDB ===", {localOnly=true})
 			KeyRoll.SendMessage("KeyRollGlobalDB.guildCache:", {localOnly=true})
 			local count = 0
@@ -1693,7 +1506,6 @@ SlashCmdList["KEYROLL"] = function(msg)
 			KeyRoll.SendMessage("===================", {localOnly=true})
 
 		else
-			-- Show debug help
 			KeyRoll.SendMessage("Debug commands:", {localOnly=true})
 			KeyRoll.SendMessage("  /kr debug           (toggle)", {localOnly=true})
 			KeyRoll.SendMessage("  /kr debug seed      (add debug keys)", {localOnly=true})
@@ -1707,13 +1519,12 @@ SlashCmdList["KEYROLL"] = function(msg)
 
 		return
 	
-	-- Unrecognized command
 	else
 		KeyRoll.SendMessage('Command not recognized. Type "/kr help" to view accepted commands.', {localOnly=true})
 		return
 	end
 
-    -- Not in party check only applies for roll and list commands
+    -- Party-only check for roll and list commands
     if msg == "list" or msg == "roll" then
         if not KeyRoll.IsInRealParty() and not KeyRoll.IsDebug() then
             KeyRoll.SendMessage("KeyRoll commands are disabled outside a real party.", {localOnly=true})
@@ -1721,10 +1532,9 @@ SlashCmdList["KEYROLL"] = function(msg)
         end
     end
 
-    -- List keys (read-only) - PARTY KEYS ONLY
 	if msg == "list" then
 		KeyRoll.PruneCache()
-		local keys = GetRollableKeys()  -- Gets party keys only
+		local keys = GetRollableKeys()
 
 		if #keys == 0 then
 			KeyRoll.SendMessage("No party keystones known. Ask players to link keys.", {localOnly=true})
@@ -1752,7 +1562,6 @@ SlashCmdList["KEYROLL"] = function(msg)
         return
     end
 	
-	-- Announce flavor text
     KeyRoll.SendMessage(ROLL_MESSAGES[math.random(#ROLL_MESSAGES)])
 
     C_Timer.After(1.5, function()
@@ -1762,7 +1571,6 @@ SlashCmdList["KEYROLL"] = function(msg)
             return
         end
 		
-		-- Pick a random key to roll
         local chosen = keysNow[math.random(#keysNow)]
 		local winMsg = WIN_MESSAGES[math.random(#WIN_MESSAGES)]
 		KeyRoll.SendMessage(string.format(
@@ -1777,8 +1585,6 @@ end
 
 KeyRoll.KEY_REQUEST_COOLDOWN = KEY_REQUEST_COOLDOWN
 KeyRoll.lastKeyRequestTime = lastKeyRequestTime
-KeyRoll.IsDebug = IsDebug
-KeyRoll.DebugPrint = DebugPrint
 KeyRoll.MarkCacheDirty = MarkCacheDirty
 KeyRoll.StoreKey = StoreKey
 KeyRoll.StoreMyKey = StoreMyKey

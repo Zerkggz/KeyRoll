@@ -1,6 +1,3 @@
--------------------------------------------------
--- Capture own keystone
--------------------------------------------------
 local function CaptureMyKeystone()
     if not C_Container then
         if KeyRoll.IsDebug() then
@@ -18,17 +15,13 @@ local function CaptureMyKeystone()
         if numSlots and numSlots > 0 then
             for slot = 1, numSlots do
                 local itemLink = C_Container.GetContainerItemLink(bag, slot)
-                if itemLink then
-                    -- Look for "Keystone:" in the link
-                    if itemLink:find("Keystone:") then
-                        -- Parse dungeon name and level from the link
-                        local dungeonName, keyLevel = itemLink:match("%[Keystone:%s*(.-)%s*%((%d+)%)%]")
-                        
-                        if dungeonName and keyLevel then
-                            mapID = KeyRoll.GetDungeonIDByName(dungeonName)
-                            level = tonumber(keyLevel)
-                            if mapID and level then break end
-                        end
+                if itemLink and itemLink:find("Keystone:") then
+                    local dungeonName, keyLevel = itemLink:match("%[Keystone:%s*(.-)%s*%((%d+)%)%]")
+                    
+                    if dungeonName and keyLevel then
+                        mapID = KeyRoll.GetDungeonIDByName(dungeonName)
+                        level = tonumber(keyLevel)
+                        if mapID and level then break end
                     end
                 end
             end
@@ -37,23 +30,17 @@ local function CaptureMyKeystone()
     end
 
     if mapID and level then
-        if KeyRoll.IsDebug() then
-            KeyRoll.DebugPrint("Captured from bag:", KeyRoll.GetDungeonNameByID(mapID), "+" .. level)
-        end        KeyRoll.StoreKey(playerName, mapID, level)
+        KeyRoll.StoreKey(playerName, mapID, level)
         if KeyRoll.IsDebug() then
             KeyRoll.DebugPrint("Captured from bag:", KeyRoll.GetDungeonNameByID(mapID), "+" .. level)
         end
         
-        -- Store in guild cache if we're in a guild
         if IsInGuild() then
             local _, class = UnitClass("player")
-            
-            -- Safely get full name with realm (can fail during combat/taint)
-            local success, fullPlayerName, realm = pcall(UnitFullName, "player")
-            if success and fullPlayerName and realm then
+            local fullPlayerName, realm = UnitFullName("player")
+            if fullPlayerName and realm and realm ~= "" then
                 fullPlayerName = fullPlayerName .. "-" .. realm
             else
-                -- Fallback to short name if UnitFullName fails
                 fullPlayerName = playerName
             end
             
@@ -64,7 +51,6 @@ local function CaptureMyKeystone()
                 end
             end
             
-            -- Also broadcast to guild, party, and friends
             if KeyRoll.BroadcastKeystoneToGuild then
                 KeyRoll.BroadcastKeystoneToGuild()
             end
@@ -82,14 +68,11 @@ local function CaptureMyKeystone()
     return false
 end
 
--------------------------------------------------
--- Auto capture party keys
--------------------------------------------------
 local function AutoCapturePartyKeys()
-    KeyRoll.RequestPartyKeystones(false, true)
-    
-    -- After requesting keys, check if we need to prune
-    -- Delay slightly to let requests complete
+    C_Timer.After(0.5, function()
+        KeyRoll.RequestPartyKeystones(false, true)
+    end)
+
     C_Timer.After(1, function()
         if KeyRoll.PruneCache then
             KeyRoll.PruneCache()
@@ -97,9 +80,6 @@ local function AutoCapturePartyKeys()
     end)
 end
 
--------------------------------------------------
--- Manual capture
--------------------------------------------------
 local function ManualCapture()
     local gotOwnKey = CaptureMyKeystone()
 
@@ -109,22 +89,17 @@ local function ManualCapture()
         KeyRoll.SendMessage("No keystone found in your bags.", {localOnly=true})
     end
 
-    -- Request party keystones if in a group
     if IsInGroup() then
         KeyRoll.SendMessage("Requesting keystones from party members...", {localOnly=true})
         KeyRoll.RequestPartyKeystones(true)
     end
     
-    -- Request friend keystones
     if KeyRoll.RequestFriendKeystones then
         KeyRoll.SendMessage("Requesting keystones from online friends...", {localOnly=true})
         KeyRoll.RequestFriendKeystones()
     end
 end
 
--------------------------------------------------
--- Event handling
--------------------------------------------------
 local eventFrame = CreateFrame("Frame")
 eventFrame:RegisterEvent("PLAYER_LOGIN")
 eventFrame:RegisterEvent("GROUP_ROSTER_UPDATE")
@@ -138,7 +113,6 @@ local BAG_UPDATE_THROTTLE = 10
 
 eventFrame:SetScript("OnEvent", function(_, event, ...)
     if event == "PLAYER_LOGIN" then
-	
         C_Timer.After(2, function()
             if not loginCaptureComplete and C_Container then
                 CaptureMyKeystone()
@@ -146,7 +120,6 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
 
                 AutoCapturePartyKeys()
                 
-                -- Request keystones from guild members using KeyRoll
                 if IsInGuild() and KeyRoll.RequestGuildKeystonesFromAddon then
                     C_Timer.After(3, function()
                         KeyRoll.RequestGuildKeystonesFromAddon()
@@ -159,7 +132,6 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         AutoCapturePartyKeys()
         KeyRoll.MarkCacheDirty()
         
-        -- Broadcast and request guild keystones when group changes
         if IsInGuild() then
             if KeyRoll.BroadcastKeystoneToGuild then
                 C_Timer.After(1, function()
@@ -171,9 +143,11 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
                     KeyRoll.BroadcastKeystoneToFriends()
                 end)
             end
-            if KeyRoll.IsInRealParty() and KeyRoll.BroadcastKeystoneToParty then
+            if KeyRoll.BroadcastKeystoneToParty then
                 C_Timer.After(1, function()
-                    KeyRoll.BroadcastKeystoneToParty()
+                    if KeyRoll.IsInRealParty() then
+                        KeyRoll.BroadcastKeystoneToParty()
+                    end
                 end)
             end
             if KeyRoll.RequestGuildKeystonesFromAddon then
@@ -184,12 +158,10 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         end
 
     elseif event == "ZONE_CHANGED_NEW_AREA" then
-        -- Delay slightly to let party roster update after zone change
         C_Timer.After(0.5, function()
             AutoCapturePartyKeys()
             KeyRoll.MarkCacheDirty()
             
-            -- Broadcast and request guild keystones after zone change
             if IsInGuild() then
                 if KeyRoll.BroadcastKeystoneToGuild then
                     C_Timer.After(1, function()
@@ -201,9 +173,11 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
                         KeyRoll.BroadcastKeystoneToFriends()
                     end)
                 end
-                if KeyRoll.IsInRealParty() and KeyRoll.BroadcastKeystoneToParty then
+                if KeyRoll.BroadcastKeystoneToParty then
                     C_Timer.After(1, function()
-                        KeyRoll.BroadcastKeystoneToParty()
+                        if KeyRoll.IsInRealParty() then
+                            KeyRoll.BroadcastKeystoneToParty()
+                        end
                     end)
                 end
                 if KeyRoll.RequestGuildKeystonesFromAddon then
@@ -216,7 +190,6 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
 
     elseif event == "BAG_UPDATE" then
         if C_Container then
-            -- Throttle bag scanning to prevent spam
             local now = GetTime()
             if now - lastBagUpdateTime >= BAG_UPDATE_THROTTLE then
                 lastBagUpdateTime = now
@@ -225,7 +198,6 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         end
 
     elseif event == "CHALLENGE_MODE_COMPLETED" then
-        -- Dungeon completed - update party keystones after 30 seconds (everyone gets new keys)
         if KeyRoll.IsDebug() then
             KeyRoll.DebugPrint("Dungeon completed - scheduling keystone update in 30 seconds")
         end

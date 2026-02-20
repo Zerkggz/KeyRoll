@@ -1,12 +1,5 @@
--------------------------------------------------
--- Dungeon data
--------------------------------------------------
-
 local DUNGEON_NAME_TO_ID = {
-    -- You can find dungeon IDs by running this command in-game:
-    -- /run for i=1,1000 do local name=C_ChallengeMode.GetMapUIInfo(i); if name then print(i,name) end end
-    
-    -- TWW Season 3 dungeons
+    -- TWW Season 3
     ["Eco-Dome Al'dani"] = 542,
     ["Ara-Kara, City of Echoes"] = 503,
     ["The Dawnbreaker"] = 505,
@@ -16,7 +9,7 @@ local DUNGEON_NAME_TO_ID = {
     ["Tazavesh: Streets of Wonder"] = 391,
     ["Tazavesh: So'leah's Gambit"] = 392,
 	
-	-- Midnight Beta Keys
+	-- Midnight Beta
 	["Magisters' Terrace"] = 558,
 	["Maisara Caverns"] = 560,
 	["Nexus-Point Xenas"] = 559,

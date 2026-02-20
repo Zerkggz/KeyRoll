@@ -1,7 +1,6 @@
 KeyRoll = KeyRoll or {}
 KeyRollDB = KeyRollDB or {}
-KeyRoll.Debug = false  -- Debug does not persist between sessions
-
+KeyRoll.Debug = false
 KeyRoll.PREFIX = "|cff00ff00[KeyRoll]|r"
 
 local guildRosterLoaded = false

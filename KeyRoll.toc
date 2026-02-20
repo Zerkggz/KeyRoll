@@ -2,7 +2,7 @@
 ## Title: KeyRoll
 ## Notes: Randomly rolls a Mythic+ keystone from party members
 ## Author: Zerkggz
-## Version: 3.2.1
+## Version: 3.2.2
 ## SavedVariables: KeyRollGlobalDB
 ## SavedVariablesPerCharacter: KeyRollDB
 
