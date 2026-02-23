@@ -1,3 +1,4 @@
+-- Shared bag scanning used by all broadcast functions
 local function GetCurrentKeystoneFromBags()
     if not C_Container then return nil, nil, nil, nil end
     
@@ -351,7 +352,12 @@ chatFrame:SetScript("OnEvent", function(_, event, message, sender)
         return
     end
     
-    sender = Ambiguate(sender, "short")
+    -- sender can be a taint-protected "secret" value during combat, causing Ambiguate to fail
+    local success, ambiguatedName = pcall(Ambiguate, sender, "short")
+    if not success or not ambiguatedName then
+        return
+    end
+    sender = ambiguatedName
     
     if KeyRoll.IsDebug() then
         KeyRoll.DebugPrint("Chat received from:", sender, "Event:", event)

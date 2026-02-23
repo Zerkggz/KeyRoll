@@ -54,12 +54,13 @@ local function CaptureMyKeystone()
             if KeyRoll.BroadcastKeystoneToGuild then
                 KeyRoll.BroadcastKeystoneToGuild()
             end
-            if KeyRoll.IsInRealParty() and KeyRoll.BroadcastKeystoneToParty then
-                KeyRoll.BroadcastKeystoneToParty()
-            end
-            if KeyRoll.BroadcastKeystoneToFriends then
-                KeyRoll.BroadcastKeystoneToFriends()
-            end
+        end
+        
+        if KeyRoll.IsInRealParty() and KeyRoll.BroadcastKeystoneToParty then
+            KeyRoll.BroadcastKeystoneToParty()
+        end
+        if KeyRoll.BroadcastKeystoneToFriends then
+            KeyRoll.BroadcastKeystoneToFriends()
         end
         
         return true
@@ -132,22 +133,23 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
         AutoCapturePartyKeys()
         KeyRoll.MarkCacheDirty()
         
+        if KeyRoll.BroadcastKeystoneToFriends then
+            C_Timer.After(1, function()
+                KeyRoll.BroadcastKeystoneToFriends()
+            end)
+        end
+        if KeyRoll.BroadcastKeystoneToParty then
+            C_Timer.After(1, function()
+                if KeyRoll.IsInRealParty() then
+                    KeyRoll.BroadcastKeystoneToParty()
+                end
+            end)
+        end
+        
         if IsInGuild() then
             if KeyRoll.BroadcastKeystoneToGuild then
                 C_Timer.After(1, function()
                     KeyRoll.BroadcastKeystoneToGuild()
-                end)
-            end
-            if KeyRoll.BroadcastKeystoneToFriends then
-                C_Timer.After(1, function()
-                    KeyRoll.BroadcastKeystoneToFriends()
-                end)
-            end
-            if KeyRoll.BroadcastKeystoneToParty then
-                C_Timer.After(1, function()
-                    if KeyRoll.IsInRealParty() then
-                        KeyRoll.BroadcastKeystoneToParty()
-                    end
                 end)
             end
             if KeyRoll.RequestGuildKeystonesFromAddon then
@@ -162,22 +164,23 @@ eventFrame:SetScript("OnEvent", function(_, event, ...)
             AutoCapturePartyKeys()
             KeyRoll.MarkCacheDirty()
             
+            if KeyRoll.BroadcastKeystoneToFriends then
+                C_Timer.After(1, function()
+                    KeyRoll.BroadcastKeystoneToFriends()
+                end)
+            end
+            if KeyRoll.BroadcastKeystoneToParty then
+                C_Timer.After(1, function()
+                    if KeyRoll.IsInRealParty() then
+                        KeyRoll.BroadcastKeystoneToParty()
+                    end
+                end)
+            end
+            
             if IsInGuild() then
                 if KeyRoll.BroadcastKeystoneToGuild then
                     C_Timer.After(1, function()
                         KeyRoll.BroadcastKeystoneToGuild()
-                    end)
-                end
-                if KeyRoll.BroadcastKeystoneToFriends then
-                    C_Timer.After(1, function()
-                        KeyRoll.BroadcastKeystoneToFriends()
-                    end)
-                end
-                if KeyRoll.BroadcastKeystoneToParty then
-                    C_Timer.After(1, function()
-                        if KeyRoll.IsInRealParty() then
-                            KeyRoll.BroadcastKeystoneToParty()
-                        end
                     end)
                 end
                 if KeyRoll.RequestGuildKeystonesFromAddon then

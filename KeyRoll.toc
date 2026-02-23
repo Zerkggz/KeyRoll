@@ -1,8 +1,9 @@
 ## Interface: 120000
 ## Title: KeyRoll
 ## Notes: Randomly rolls a Mythic+ keystone from party members
+## IconTexture: Interface\AddOns\KeyRoll\Icons\Icon.tga
 ## Author: Zerkggz
-## Version: 3.2.2
+## Version: 3.2.3
 ## SavedVariables: KeyRollGlobalDB
 ## SavedVariablesPerCharacter: KeyRollDB
 
