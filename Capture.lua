@@ -82,21 +82,13 @@ local function AutoCapturePartyKeys()
 end
 
 local function ManualCapture()
-    local gotOwnKey = CaptureMyKeystone()
-
-    if gotOwnKey then
-        KeyRoll.SendMessage("Your keystone captured.", {localOnly=true})
-    else
-        KeyRoll.SendMessage("No keystone found in your bags.", {localOnly=true})
-    end
+    CaptureMyKeystone()
 
     if IsInGroup() then
-        KeyRoll.SendMessage("Requesting keystones from party members...", {localOnly=true})
         KeyRoll.RequestPartyKeystones(true)
     end
     
     if KeyRoll.RequestFriendKeystones then
-        KeyRoll.SendMessage("Requesting keystones from online friends...", {localOnly=true})
         KeyRoll.RequestFriendKeystones()
     end
 end

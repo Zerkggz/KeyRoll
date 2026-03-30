@@ -56,8 +56,9 @@ local function RequestPartyKeystones(force, silent)
 
     -- Re-check party state before sending (can change between check above and here)
     if KeyRoll.IsInRealParty() then
+        local chatType = KeyRoll.GetPartyChatType()
         for prefix, msg in pairs(addons) do
-            pcall(C_ChatInfo.SendAddonMessage, prefix, msg, "PARTY")
+            pcall(C_ChatInfo.SendAddonMessage, prefix, msg, chatType)
         end
     end
     
@@ -223,7 +224,7 @@ function KeyRollComm:OnCommReceived(prefix, message, distribution, sender)
         return
     end
     
-    if prefix == "KeyRoll" and distribution == "PARTY" then
+    if prefix == "KeyRoll" and (distribution == "PARTY" or distribution == "INSTANCE_CHAT") then
         if KeyRoll.IsDebug() then
             KeyRoll.DebugPrint("=== KeyRoll PARTY Message ===")
             KeyRoll.DebugPrint("From:", sender)
@@ -299,7 +300,7 @@ function KeyRollComm:OnCommReceived(prefix, message, distribution, sender)
         return
     end
     
-    if distribution ~= "PARTY" then return end
+    if distribution ~= "PARTY" and distribution ~= "INSTANCE_CHAT" then return end
     
     HandleReceivedKeystone(prefix, message, sender)
 end
@@ -323,7 +324,7 @@ local genericFrame = CreateFrame("Frame")
 genericFrame:RegisterEvent("CHAT_MSG_ADDON")
 
 genericFrame:SetScript("OnEvent", function(_, event, prefix, message, distribution, sender)
-    if distribution ~= "PARTY" then return end
+    if distribution ~= "PARTY" and distribution ~= "INSTANCE_CHAT" then return end
     if not KeyRoll.IsInRealParty() then return end
     if ADDON_KEYROLL_PREFIXES[prefix] then return end
     
@@ -344,6 +345,8 @@ end)
 local chatFrame = CreateFrame("Frame")
 chatFrame:RegisterEvent("CHAT_MSG_PARTY")
 chatFrame:RegisterEvent("CHAT_MSG_PARTY_LEADER")
+chatFrame:RegisterEvent("CHAT_MSG_INSTANCE_CHAT")
+chatFrame:RegisterEvent("CHAT_MSG_INSTANCE_CHAT_LEADER")
 chatFrame:RegisterEvent("CHAT_MSG_GUILD")
 chatFrame:RegisterEvent("CHAT_MSG_OFFICER")
 
@@ -374,7 +377,8 @@ chatFrame:SetScript("OnEvent", function(_, event, message, sender)
                 
                 if mapID and level then
                     local isGuildMember = KeyRoll.IsGuildMember and KeyRoll.IsGuildMember(sender)
-                    local isPartyChat = (event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER")
+                    local isPartyChat = (event == "CHAT_MSG_PARTY" or event == "CHAT_MSG_PARTY_LEADER"
+                        or event == "CHAT_MSG_INSTANCE_CHAT" or event == "CHAT_MSG_INSTANCE_CHAT_LEADER")
                     local isGuildChat = (event == "CHAT_MSG_GUILD" or event == "CHAT_MSG_OFFICER")
                     local inParty = KeyRoll.IsInRealParty()
                     
@@ -817,7 +821,7 @@ local function BroadcastKeystoneToParty()
     if not mapID or not level then return end
     
     local message = string.format("UPDATE:%s:%s:%d:%d", playerName, class or "UNKNOWN", mapID, level)
-    AceComm:SendCommMessage("KeyRoll", message, "PARTY")
+    AceComm:SendCommMessage("KeyRoll", message, KeyRoll.GetPartyChatType())
     
     if KeyRoll.IsDebug() then
         KeyRoll.DebugPrint("Broadcasted to party:", KeyRoll.GetDungeonNameByID(mapID), "+"..level)

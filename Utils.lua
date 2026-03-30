@@ -50,7 +50,7 @@ local function GetNextResetTime()
         resetHour = 4  -- 04:00 UTC
     else  -- US/Oceanic
         resetDay = 3    -- Tuesday
-        resetHour = 15  -- 15:00 UTC
+        resetHour = 15  -- 3:00 PM server time
     end
     
     local daysUntilReset
@@ -267,9 +267,18 @@ local function IsInRealParty()
     return numRealPlayers >= 2 and numRealPlayers <= 5
 end
 
+-- Returns "INSTANCE_CHAT" for queued groups (dungeon finder, etc.) or "PARTY" for normal parties
+local function GetPartyChatType()
+    if IsInGroup(LE_PARTY_CATEGORY_INSTANCE) then
+        return "INSTANCE_CHAT"
+    end
+    return "PARTY"
+end
+
 KeyRoll.IsInRealParty = IsInRealParty
 KeyRoll.IsActuallyInParty = IsActuallyInParty
 KeyRoll.GetCurrentPartyMembers = GetCurrentPartyMembers
+KeyRoll.GetPartyChatType = GetPartyChatType
 
 local function RefreshStoredFrame()
     if storedFrame and storedFrame:IsShown() then
@@ -1310,7 +1319,7 @@ local function SendMessage(text, opts)
     if localOnly or not IsInRealParty() or KeyRoll.Debug then
         print(KeyRoll.PREFIX, text)
     else
-        SendChatMessage(text, "PARTY")
+        SendChatMessage(text, GetPartyChatType())
     end
 end
 
@@ -1333,10 +1342,6 @@ SlashCmdList["KEYROLL"] = function(msg)
     elseif msg == "list" then
         -- Handled at the end of this function
     
-    elseif msg == "capture" then
-        KeyRoll.ManualCapture()
-        return
-    
     elseif msg == "clear" then
         for name in pairs(cache) do
             cache[name] = nil
@@ -1356,7 +1361,6 @@ SlashCmdList["KEYROLL"] = function(msg)
         KeyRoll.SendMessage("  |cff00ff00/kr|r or |cff00ff00/keyroll|r - Open keystone viewer UI", {localOnly=true})
         KeyRoll.SendMessage("  |cff00ff00/kr roll|r - Roll a random party keystone", {localOnly=true})
         KeyRoll.SendMessage("  |cff00ff00/kr list|r - List all party keystones in chat", {localOnly=true})
-        KeyRoll.SendMessage("  |cff00ff00/kr capture|r - Manually capture keystones", {localOnly=true})
         KeyRoll.SendMessage("  |cff00ff00/kr clear|r - Clear party cache (not guild/friends)", {localOnly=true})
         KeyRoll.SendMessage("  |cff00ff00/kr help|r - Show this help message", {localOnly=true})
         KeyRoll.SendMessage(" ", {localOnly=true})
