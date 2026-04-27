@@ -1,0 +1,19 @@
+## Interface: 120001, 120005
+## Title: KeyRoll
+## Notes: Randomly rolls a Mythic+ keystone from party members
+## IconTexture: Interface\AddOns\KeyRoll\Icons\Icon.tga
+## Author: Zerkggz
+## Version: @project-version@
+## X-Curse-Project-ID: 1449703
+## X-Wago-ID: b6XeR1Kp
+## SavedVariables: KeyRollGlobalDB
+## SavedVariablesPerCharacter: KeyRollDB
+
+Libs\AceComm-3.0\AceComm-3.0.lua
+Libs\AceSerializer-3.0\AceSerializer-3.0.lua
+
+Keyroll.lua
+Dungeons.lua
+Utils.lua
+Comm.lua
+Capture.lua

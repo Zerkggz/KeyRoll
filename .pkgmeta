@@ -1,0 +1,8 @@
+package-as: KeyRoll
+
+ignore:
+  - .github
+  - .gitignore
+  - README.md
+  - CHANGELOG.md
+  - LICENSE
