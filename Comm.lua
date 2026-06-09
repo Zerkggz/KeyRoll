@@ -877,8 +877,8 @@ local function BroadcastKeystoneToFriends()
     
     local message = string.format("UPDATE:%s:%s:%d:%d", playerName, class or "UNKNOWN", mapID, level)
     
-    local _, numBNetOnline = BNGetNumFriends()
-    for i = 1, numBNetOnline do
+    local numBNetTotal = BNGetNumFriends()
+    for i = 1, numBNetTotal do
         local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
         if accountInfo and accountInfo.gameAccountInfo and accountInfo.gameAccountInfo.isOnline then
             BNSendGameData(accountInfo.bnetAccountID, "KeyRoll", message)

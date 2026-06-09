@@ -161,7 +161,6 @@ if KeyRoll and KeyRoll.Debug then
 end
 
 local cache = KeyRollGlobalDB.partyCache
-local friendCache = KeyRollGlobalDB.friendCache
 local lastPartyMembers = {}
 local cacheNeedsPrune = false
 local storedFrame
@@ -391,6 +390,32 @@ local function StoreKey(sender, mapID, level)
         end
     end
 
+    -- Cross-populate to friend cache if this person is a BNet friend
+    local numBNetTotal = BNGetNumFriends()
+    for i = 1, numBNetTotal do
+        local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
+        if accountInfo and accountInfo.gameAccountInfo then
+            local characterName = accountInfo.gameAccountInfo.characterName
+            if characterName and Ambiguate(characterName, "short") == shortName then
+                KeyRollGlobalDB.friendCache[shortName] = {
+                    name = shortName,
+                    fullName = fullName,
+                    realm = realm,
+                    class = class,
+                    mapID = mapID,
+                    level = level,
+                    dungeon = dungeon,
+                    time = time(),
+                    source = "party",
+                }
+                if IsDebug() then
+                    DebugPrint("Also stored in friend cache (BNet friend in party):", shortName)
+                end
+                break
+            end
+        end
+    end
+
     MarkCacheDirty()
     if IsInRealParty() and IsDebug() then
         DebugPrint("Stored keystone:", shortName, dungeon, "+"..level)
@@ -444,8 +469,8 @@ local function StoreGuildKey(sender, mapID, level, class)
     
     -- Check if this person is a Battle.net friend and add to friend cache
     local isBNetFriend = false
-    local _, numBNetOnline = BNGetNumFriends()
-    for i = 1, numBNetOnline do
+    local numBNetTotal = BNGetNumFriends()
+    for i = 1, numBNetTotal do
         local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
         if accountInfo and accountInfo.gameAccountInfo then
             local characterName = accountInfo.gameAccountInfo.characterName
@@ -556,9 +581,9 @@ local function IsCharacterOnline(charName, tabType)
         end
         
         -- Battle.net friend status is more reliable than guild roster for online checks
-        local _, numBNetOnline = BNGetNumFriends()
-        if numBNetOnline then
-            for i = 1, numBNetOnline do
+        local numBNetTotal = BNGetNumFriends()
+        if numBNetTotal then
+            for i = 1, numBNetTotal do
                 local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
                 if accountInfo and accountInfo.gameAccountInfo and accountInfo.gameAccountInfo.isOnline then
                     local characterName = accountInfo.gameAccountInfo.characterName
@@ -581,12 +606,12 @@ local function IsCharacterOnline(charName, tabType)
     end
     
     if tabType == "friends" then
-        local _, numBNetOnline = BNGetNumFriends()
-        if not numBNetOnline then
+        local numBNetTotal = BNGetNumFriends()
+        if not numBNetTotal then
             return true
         end
         
-        for i = 1, numBNetOnline do
+        for i = 1, numBNetTotal do
             local accountInfo = C_BattleNet.GetFriendAccountInfo(i)
             if accountInfo and accountInfo.gameAccountInfo and accountInfo.gameAccountInfo.isOnline then
                 local characterName = accountInfo.gameAccountInfo.characterName
@@ -715,9 +740,23 @@ local function CreateStoredFrame()
     refreshButton:RegisterForClicks("LeftButtonUp")
     
     refreshButton:SetScript("OnClick", function(self)
+        -- Actually request new data, not just redraw
+        if KeyRoll.CaptureMyKeystone then
+            KeyRoll.CaptureMyKeystone()
+        end
+        if KeyRoll.IsInRealParty() and KeyRoll.RequestPartyKeystones then
+            KeyRoll.RequestPartyKeystones(true)
+        end
+        if KeyRoll.RequestFriendKeystones then
+            KeyRoll.RequestFriendKeystones()
+        end
+        if IsInGuild() and KeyRoll.RequestGuildKeystonesFromAddon then
+            KeyRoll.RequestGuildKeystonesFromAddon()
+        end
+        
         storedFrame:Refresh()
         if KeyRoll.IsDebug() then
-            KeyRoll.DebugPrint("Manual refresh triggered")
+            KeyRoll.DebugPrint("Manual refresh triggered - requested new data from all sources")
         end
     end)
     
@@ -1022,6 +1061,50 @@ local function CreateStoredFrame()
                 table.insert(keys, key)
             end
         elseif self.activeTab == "party" then
+            -- Cross-populate: if a party member has a key in guild or friend cache but not party cache, add it
+            if IsInRealParty() then
+                local partyMembers = GetCurrentPartyMembers()
+                for memberName in pairs(partyMembers) do
+                    if not cache[memberName] then
+                        -- Check guild cache
+                        local guildKey = KeyRollGlobalDB.guildCache and KeyRollGlobalDB.guildCache[memberName]
+                        if guildKey then
+                            cache[memberName] = {
+                                name = guildKey.name,
+                                fullName = guildKey.fullName,
+                                realm = guildKey.realm,
+                                class = guildKey.class,
+                                mapID = guildKey.mapID,
+                                level = guildKey.level,
+                                dungeon = guildKey.dungeon,
+                                time = guildKey.time,
+                            }
+                            if IsDebug() then
+                                DebugPrint("Cross-populated party cache from guild:", memberName)
+                            end
+                        end
+                        -- Check friend cache
+                        if not cache[memberName] then
+                            local friendKey = KeyRollGlobalDB.friendCache[memberName]
+                            if friendKey then
+                                cache[memberName] = {
+                                    name = friendKey.name,
+                                    fullName = friendKey.fullName,
+                                    realm = friendKey.realm,
+                                    class = friendKey.class,
+                                    mapID = friendKey.mapID,
+                                    level = friendKey.level,
+                                    dungeon = friendKey.dungeon,
+                                    time = friendKey.time,
+                                }
+                                if IsDebug() then
+                                    DebugPrint("Cross-populated party cache from friends:", memberName)
+                                end
+                            end
+                        end
+                    end
+                end
+            end
             keys = GetRollableKeys()
         elseif self.activeTab == "guild" then
             if IsDebug() then
@@ -1059,20 +1142,11 @@ local function CreateStoredFrame()
         elseif self.activeTab == "friends" then
             if IsDebug() then
                 DebugPrint("=== Loading Friends Tab ===")
-                DebugPrint("Local friendCache has", #friendCache, "entries (length)")
-                local localCount = 0
-                for k in pairs(friendCache) do
-                    localCount = localCount + 1
-                end
-                DebugPrint("Local friendCache has", localCount, "entries (pairs)")
-                
                 local globalCount = 0
                 for k in pairs(KeyRollGlobalDB.friendCache) do
                     globalCount = globalCount + 1
                 end
-                DebugPrint("Global KeyRollGlobalDB.friendCache has", globalCount, "entries")
-                
-                DebugPrint("friendCache == KeyRollGlobalDB.friendCache?", friendCache == KeyRollGlobalDB.friendCache)
+                DebugPrint("KeyRollGlobalDB.friendCache has", globalCount, "entries")
                 
                 if globalCount > 0 then
                     DebugPrint("Entries in KeyRollGlobalDB.friendCache:")
@@ -1321,7 +1395,7 @@ local function CreateStoredFrame()
                     msg = "|cffaaaaaa Join a guild to see guild member keystones.|r"
                 end
             elseif self.activeTab == "friends" then
-                msg = "|cffaaaaaa No friend keystones found.\nFriends must have a keystone addon installed (Astral Keys, BigWigs, DBM, etc.)|r"
+                msg = "|cffaaaaaa No friend keystones found.\nFriends must have a keystone addon installed (KeyRoll, Astral Keys, BigWigs, DBM, etc.)|r"
             end
             
             self.emptyMessage:SetText(msg)
