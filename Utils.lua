@@ -70,6 +70,24 @@ end
 local function CheckAndClearWeeklyReset()
     local serverTime = GetServerTime()
     
+    -- One-time migration: older versions computed lastResetTime with a timezone bug (local
+    -- time instead of UTC), storing an incorrect value that prevented resets from firing. Clear
+    -- the stale caches once and recompute the reset time correctly.
+    if not KeyRollGlobalDB._resetTimeUTCFixed then
+        for guildName, guildCache in pairs(KeyRollGlobalDB.guildCaches) do
+            for k in pairs(guildCache) do guildCache[k] = nil end
+        end
+        for k in pairs(KeyRollGlobalDB.friendCache) do KeyRollGlobalDB.friendCache[k] = nil end
+        for k in pairs(KeyRollGlobalDB.myKeysCache) do KeyRollGlobalDB.myKeysCache[k] = nil end
+        for k in pairs(KeyRollGlobalDB.partyCache) do KeyRollGlobalDB.partyCache[k] = nil end
+        
+        KeyRollGlobalDB.lastResetTime = GetNextResetTime()
+        KeyRollGlobalDB._resetTimeUTCFixed = true
+        if KeyRoll.Debug then
+            print("[KeyRoll Debug] Cleared stale caches and recomputed reset time (UTC fix):", date("%Y-%m-%d %H:%M:%S", KeyRollGlobalDB.lastResetTime))
+        end
+    end
+    
     if not KeyRollGlobalDB.lastResetTime or KeyRollGlobalDB.lastResetTime == 0 then
         KeyRollGlobalDB.lastResetTime = GetNextResetTime()
         if KeyRoll.Debug then
