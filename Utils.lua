@@ -42,7 +42,7 @@ end
 local function GetNextResetTime()
     local region = GetCurrentRegion()
     local serverTime = GetServerTime()
-    local d = date("*t", serverTime)
+    local d = date("!*t", serverTime)  -- UTC components (must match UTC reset hours)
     local resetHour, resetDay
     
     if region == 3 then  -- EU
@@ -50,7 +50,7 @@ local function GetNextResetTime()
         resetHour = 4  -- 04:00 UTC
     else  -- US/Oceanic
         resetDay = 3    -- Tuesday
-        resetHour = 15  -- 3:00 PM server time
+        resetHour = 15  -- 15:00 UTC
     end
     
     local daysUntilReset
@@ -1425,6 +1425,9 @@ SlashCmdList["KEYROLL"] = function(msg)
     if msg == "" then
         if not KeyRoll.StoredFrame then KeyRoll.CreateStoredFrame() end
         KeyRoll.CheckAndClearWeeklyReset()
+        if KeyRoll.CaptureMyKeystone then
+            KeyRoll.CaptureMyKeystone()
+        end
         KeyRoll.StoredFrame:Show()
         KeyRoll.StoredFrame:Refresh()
         return
