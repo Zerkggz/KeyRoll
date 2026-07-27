@@ -714,8 +714,8 @@ local function GetRollableKeys()
 end
 
 local function DebugSeed()
-    cache["TestPlayer1"] = { name="TestPlayer1", mapID=503, level=12, time=time(), debug=true }
-    cache["TestPlayer2"] = { name="TestPlayer2", mapID=505, level=15, time=time(), debug=true }
+    cache["TestPlayer1"] = { name="TestPlayer1", mapID=250, level=12, time=time(), debug=true }
+    cache["TestPlayer2"] = { name="TestPlayer2", mapID=586, level=15, time=time(), debug=true }
 end
 
 local function DebugClear()
