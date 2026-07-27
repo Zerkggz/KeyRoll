@@ -8,6 +8,16 @@ local DUNGEON_NAME_TO_ID = {
     ["Pit of Saron"] = 556,
     ["Seat of the Triumvirate"] = 583,
     ["Skyreach"] = 161,
+	
+	-- Midnight Season 2
+	["Altar of Fangs"] = 588,
+	["Den of Nalorakk"] = 586,
+	["Murder Row"] = 587,
+	["The Blinding Vale"] = 584,
+	["Voidscar Arena"] = 585,
+	["Kings' Rest"] = 249,
+	["Ruby Life Pools"] = 399,
+	["Temple of Sethraliss"] = 250,
 }
 
 local DUNGEON_ID_TO_NAME = {}
